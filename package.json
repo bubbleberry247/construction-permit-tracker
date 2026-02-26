@@ -1,0 +1,17 @@
+{
+  "name": "construction-permit-tracker",
+  "version": "1.0.0",
+  "description": "建設業許可証 期限管理システム（Google Apps Script）",
+  "scripts": {
+    "push": "clasp push",
+    "pull": "clasp pull",
+    "deploy": "clasp push && clasp deploy",
+    "open": "clasp open"
+  },
+  "devDependencies": {
+    "@google/clasp": "^2.4.2"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
