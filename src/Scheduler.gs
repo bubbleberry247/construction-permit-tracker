@@ -6,6 +6,13 @@
  * time-driven トリガーで毎日実行するメイン関数
  */
 function runDailyNotifications() {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(60000);
+  } catch (lockErr) {
+    logError('runDailyNotifications ロック取得失敗（多重実行防止）', lockErr);
+    return;
+  }
   try {
     // 1. NOTIFY_STAGES_DAYS を配列に変換
     var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '120,90,60,45,30,14,0';
@@ -32,6 +39,8 @@ function runDailyNotifications() {
   } catch (err) {
     logError('runDailyNotifications エラー', err);
     sendErrorAlert('日次バッチエラー', err.message + '\n' + (err.stack || ''));
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -44,16 +53,13 @@ function processPermit_(permit, stageDays) {
   var days = daysUntil(permit.expiry_date);
   if (isNaN(days)) return;
 
-  // 通知ステージ判定
-  var stage = determineStage_(days, stageDays);
+  // 通知ステージ判定（累積方式: determineStage_ 内で未送信チェック済み）
+  var stage = determineStage_(days, stageDays, permit.permit_id);
 
   if (stage !== null) {
-    // 未送信の場合のみ通知
-    if (!NotificationsModel.hasBeenSent(permit.permit_id, stage)) {
-      var company = CompaniesModel.findById(permit.company_id);
-      if (company) {
-        Mailer.sendExpiryNotification(permit, company, stage);
-      }
+    var company = CompaniesModel.findById(permit.company_id);
+    if (company) {
+      Mailer.sendExpiryNotification(permit, company, stage);
     }
   }
 
@@ -62,18 +68,25 @@ function processPermit_(permit, stageDays) {
 }
 
 /**
- * 日数からステージを判定する
+ * 日数からステージを判定する（累積方式: トリガー欠落時の取りこぼし防止）
+ * stageDays の中で days <= stageDays[i] かつ最も緊急な（日数が小さい）未送信ステージを返す
  * @param {number} days  今日から満了日までの日数（負=過去）
  * @param {number[]} stageDays  降順ソート済み
+ * @param {string} permitId  重複送信チェック用
  * @return {string|null}  ステージ文字列 or null（該当なし）
  */
-function determineStage_(days, stageDays) {
-  if (days < 0) return 'EXPIRED';
+function determineStage_(days, stageDays, permitId) {
+  // EXPIRED チェック
+  if (days < 0) {
+    if (!NotificationsModel.hasBeenSent(permitId, 'EXPIRED')) {
+      return 'EXPIRED';
+    }
+  }
 
-  // 各ステージ日数に対して ±1日の許容範囲で判定
-  for (var i = 0; i < stageDays.length; i++) {
+  // 各ステージを昇順（小→大）で走査し、最も緊急な未送信ステージを返す
+  for (var i = stageDays.length - 1; i >= 0; i--) {
     var sd = stageDays[i];
-    if (Math.abs(days - sd) <= 1) {
+    if (days <= sd && !NotificationsModel.hasBeenSent(permitId, String(sd))) {
       return String(sd);
     }
   }

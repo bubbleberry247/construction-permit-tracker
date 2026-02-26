@@ -8,7 +8,7 @@
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('許可証管理')
-    .addItem('期限チェックを今すぐ実行', 'Scheduler.runNow')
+    .addItem('期限チェックを今すぐ実行', 'runNow')
     .addSeparator()
     .addItem('テストメール送信', 'promptAndSendTestEmail')
     .addItem('設定チェック', 'checkConfigMenu')

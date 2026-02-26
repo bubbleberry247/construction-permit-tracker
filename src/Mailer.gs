@@ -60,7 +60,7 @@ var Mailer = {
     var subject = '【重要】建設業許可 更新手続のお願い（満了日：' + expiryDateStr + '）';
 
     var formUrl = formId ? 'https://docs.google.com/forms/d/' + formId + '/viewform' : '（フォームURL未設定）';
-    var adminEmailList = adminEmails ? adminEmails.split(',').map(function(e) { return e.trim(); }).join('、') : '（未設定）';
+    var contactInfo = getConfig('CONTACT_INFO') || '本メールの送信元までご連絡ください';
 
     var stageMessage = this._getStageMessage(stage);
 
@@ -77,7 +77,7 @@ var Mailer = {
       '■ 許可証・受付票の提出はこちら\n' +
       formUrl + '\n\n' +
       '■ お問い合わせ先\n' +
-      adminEmailList + '\n\n' +
+      contactInfo + '\n\n' +
       '何卒よろしくお願いいたします。';
 
     // CC の組み立て（協力会社の CC のみ）

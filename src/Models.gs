@@ -291,7 +291,7 @@ var NotificationsModel = {
       if (
         String(rows[i].permit_id) === String(permitId) &&
         String(rows[i].stage) === String(stage) &&
-        (result === 'SENT' || result === 'PENDING')
+        result === 'SENT'
       ) {
         return true;
       }

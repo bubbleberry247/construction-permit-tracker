@@ -7,6 +7,27 @@
  * @param {Object} e  フォームトリガーイベントオブジェクト
  */
 function onFormSubmit(e) {
+  var lock = LockService.getDocumentLock();
+  try {
+    lock.waitLock(30000);
+  } catch (lockErr) {
+    logError('onFormSubmit ロック取得失敗（同時実行制御）', lockErr);
+    sendErrorAlert('フォーム処理ロック取得失敗', 'フォーム送信の同時処理でロック取得に失敗しました。手動確認が必要です。');
+    return;
+  }
+  try {
+
+  var triggerUid = (e && e.triggerUid) ? String(e.triggerUid) : '';
+
+  // triggerUid による重複チェック
+  if (triggerUid) {
+    var existing = SubmissionsModel.findByTriggerUid(triggerUid);
+    if (existing && existing.parsed_result === 'OK') {
+      Logger.log('重複送信スキップ: triggerUid=' + triggerUid);
+      return;
+    }
+  }
+
   var submissionId = generateUuid();
   var submittedAt = new Date();
 
@@ -35,6 +56,7 @@ function onFormSubmit(e) {
   // Submissions にまず記録（後で更新）
   var submissionData = {
     submission_id:          submissionId,
+    trigger_uid:            triggerUid,
     submitted_at:           submittedAt,
     company_name_raw:       companyNameRaw,
     contact_email_raw:      contactEmail,
@@ -64,8 +86,19 @@ function onFormSubmit(e) {
     // （最終的に OK/NG で上書きする）
 
     // 5. Company を検索・なければ作成
-    var company = CompaniesModel.findByName(companyNameRaw);
+    var company = CompaniesModel.findByNameAndEmail(companyNameRaw, contactEmail);
     if (!company) {
+      // Check if same name exists with different email (possible different company with same name)
+      var sameNameCompany = CompaniesModel.findByName(companyNameRaw);
+      if (sameNameCompany) {
+        sendErrorAlert(
+          '同名会社の新規登録',
+          '会社名「' + companyNameRaw + '」は既に登録されていますが、メールアドレスが異なります。\n' +
+          '既存: ' + (sameNameCompany.contact_email || '未設定') + '\n' +
+          '今回: ' + contactEmail + '\n' +
+          '新規会社として登録しました。重複の場合は手動統合が必要です。'
+        );
+      }
       company = CompaniesModel.create({
         company_name:        companyNameRaw,
         contact_person:      contactPerson,
@@ -193,10 +226,14 @@ function onFormSubmit(e) {
     });
 
     // 9. 受領通知メール送信
-    var finalPermit = PermitsModel.findByCompanyAndNumber(companyId, permitNumberRaw);
-    var finalCompany = CompaniesModel.findById(companyId);
-    if (finalPermit && finalCompany) {
-      Mailer.sendReceiptConfirmation(finalPermit, finalCompany);
+    try {
+      var finalPermit = PermitsModel.findByCompanyAndNumber(companyId, permitNumberRaw);
+      var finalCompany = CompaniesModel.findById(companyId);
+      if (finalPermit && finalCompany) {
+        Mailer.sendReceiptConfirmation(finalPermit, finalCompany);
+      }
+    } catch (mailErr) {
+      logError('受領確認メール送信エラー（処理自体は成功）', mailErr);
     }
 
   } catch (err) {
@@ -216,5 +253,9 @@ function onFormSubmit(e) {
       'エラー: ' + (err.message || String(err)) + '\n' +
       (err.stack || '')
     );
+  }
+
+  } finally {
+    lock.releaseLock();
   }
 }
