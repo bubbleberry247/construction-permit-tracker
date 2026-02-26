@@ -120,6 +120,7 @@ notification_id	sent_at	company_id	permit_id	to_email	cc_email	stage	subject	bod
 | NOTIFY_STAGES_DAYS | 120,90,60,45,30,14,0 | 通知するステージ（満了日までの日数、カンマ区切り） |
 | RUN_TIMEZONE | Asia/Tokyo | タイムゾーン |
 | ENABLE_SEND | true | メール送信の有効化（false でドライラン） |
+| GMAIL_DAILY_LIMIT | 150 | Gmail日次送信上限（デフォルト150件） |
 
 ---
 
@@ -157,7 +158,7 @@ notification_id	sent_at	company_id	permit_id	to_email	cc_email	stage	subject	bod
 - **「Configシートが見つかりません」エラー**: 「許可証管理」→「シートヘッダ初期化」を実行してシートを作成してください
 - **フォーム送信後にSubmissionsにNGが記録される**: Submissionsの error_message 列を確認し、ADMIN_EMAILS に送られたエラーメールも参照してください
 - **メールが届かない**: ENABLE_SEND=true になっているか確認。Notifications の result 列が DRY_RUN になっていれば false になっています
-- **Gmail送信上限（1日150件）に達した**: 大量の許可証が同時期に期限を迎えている場合に発生します。ADMIN_EMAILSにアラートが届きます。翌日以降に自動で送信されます
+- **Gmail送信上限に達した**: 大量の許可証が同時期に期限を迎えている場合に発生します。ADMIN_EMAILSにアラートが届きます。翌日以降に自動で送信されます。上限はConfigシートの `GMAIL_DAILY_LIMIT`（デフォルト150件）で変更可能です
 - **トリガーが実行されない**: Apps Script の「トリガー」画面で runDailyNotifications の設定を確認してください
 - **DriveApp.getFileById エラー**: フォームのファイルアップロード権限とDriveのアクセス権を確認してください
 - **onFormSubmit が動作しない**: トリガーがフォーム送信時に設定されているか確認。Apps Script のダッシュボードで実行ログを確認してください

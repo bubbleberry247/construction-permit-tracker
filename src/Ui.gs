@@ -95,7 +95,7 @@ function initSheetHeaders() {
       'permit_file_version', 'note', 'created_at', 'updated_at'
     ],
     'Submissions': [
-      'submission_id', 'submitted_at', 'company_name_raw', 'contact_email_raw',
+      'submission_id', 'trigger_uid', 'submitted_at', 'company_name_raw', 'contact_email_raw',
       'permit_number_raw', 'expiry_date_raw', 'uploaded_file_drive_id',
       'uploaded_file_url', 'parsed_result', 'error_message'
     ],
@@ -106,6 +106,17 @@ function initSheetHeaders() {
   };
 
   var errors = [];
+
+  // Config シートの初期値（シートが空の場合のみ追記）
+  var CONFIG_DEFAULTS = [
+    ['ADMIN_EMAILS',        '',               '管理者メールアドレス（カンマ区切り）'],
+    ['DRIVE_ROOT_FOLDER_ID','',               '許可証PDF保管フォルダのID'],
+    ['FORM_ID',             '',               'Google Form のID'],
+    ['NOTIFY_STAGES_DAYS',  '120,90,60,45,30,14,0', '通知するステージ（満了日までの日数）'],
+    ['RUN_TIMEZONE',        'Asia/Tokyo',     'タイムゾーン'],
+    ['ENABLE_SEND',         'false',          'メール送信有効化（trueで送信）'],
+    ['GMAIL_DAILY_LIMIT',   '150',            'Gmail日次送信上限']
+  ];
 
   Object.keys(SHEET_HEADERS).forEach(function(sheetName) {
     try {
@@ -120,6 +131,12 @@ function initSheetHeaders() {
       var headerRange = sheet.getRange(1, 1, 1, headers.length);
       headerRange.setFontWeight('bold');
       headerRange.setBackground('#e8f0fe');
+
+      // Config シートの初期値を追記（データ行が無い場合のみ）
+      if (sheetName === 'Config' && sheet.getLastRow() <= 1) {
+        sheet.getRange(2, 1, CONFIG_DEFAULTS.length, CONFIG_DEFAULTS[0].length)
+             .setValues(CONFIG_DEFAULTS);
+      }
     } catch (err) {
       errors.push(sheetName + ': ' + err.message);
     }

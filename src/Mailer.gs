@@ -5,15 +5,17 @@
 var Mailer = {
 
   /**
-   * Gmail 送信上限チェック（1日150件で停止）
+   * Gmail 送信上限チェック（Config の GMAIL_DAILY_LIMIT で制御、デフォルト150）
    * @return {boolean}  true = 送信可能
    */
   _checkDailyLimit: function() {
+    var limit = parseInt(getConfig('GMAIL_DAILY_LIMIT') || '150', 10);
+    if (isNaN(limit) || limit <= 0) limit = 150;
     var sent = NotificationsModel.countSentToday();
-    if (sent >= 150) {
+    if (sent >= limit) {
       sendErrorAlert(
         'Gmail日次送信上限に達しました',
-        '本日の送信件数が150件を超えました。残りの通知はスキップされます。'
+        '本日の送信件数が' + limit + '件を超えました。残りの通知はスキップされます。'
       );
       return false;
     }
@@ -78,17 +80,18 @@ var Mailer = {
       adminEmailList + '\n\n' +
       '何卒よろしくお願いいたします。';
 
-    // CC の組み立て
+    // CC の組み立て（協力会社の CC のみ）
     var ccList = [];
     if (company.contact_email_cc) ccList.push(company.contact_email_cc);
 
-    // stage が '30' 以下または 'EXPIRED' の場合は ADMIN_EMAILS もCC
+    // BCC の組み立て（管理者メールは BCC で送信し、外部に漏れないようにする）
+    var bccList = [];
     var stageNum = parseInt(String(stage), 10);
     var isHighAlert = stage === 'EXPIRED' || (!isNaN(stageNum) && stageNum <= 30);
     if (isHighAlert && adminEmails) {
       adminEmails.split(',').forEach(function(e) {
         var trimmed = e.trim();
-        if (trimmed) ccList.push(trimmed);
+        if (trimmed) bccList.push(trimmed);
       });
     }
 
@@ -97,6 +100,7 @@ var Mailer = {
       permit_id:  permit.permit_id,
       to_email:   company.contact_email,
       cc_email:   ccList.join(','),
+      bcc_email:  bccList.join(','),
       stage:      String(stage),
       subject:    subject,
       body:       body,
@@ -118,19 +122,25 @@ var Mailer = {
       return;
     }
 
+    // 冪等性確保: 先に PENDING でログ記録し、送信後に結果を更新する
+    notificationData.result = 'PENDING';
+    var created = NotificationsModel.create(notificationData);
+    var notificationId = created.notification_id;
+
     try {
       var mailOptions = { subject: subject };
       if (ccList.length > 0) mailOptions.cc = ccList.join(',');
+      if (bccList.length > 0) mailOptions.bcc = bccList.join(',');
 
       GmailApp.sendEmail(company.contact_email, subject, body, mailOptions);
-      notificationData.result = 'SENT';
+      NotificationsModel.updateById(notificationId, { result: 'SENT' });
     } catch (err) {
+      NotificationsModel.updateById(notificationId, {
+        result: 'FAILED',
+        error_message: err.message || String(err)
+      });
       logError('sendExpiryNotification 送信エラー', err);
-      notificationData.result = 'FAILED';
-      notificationData.error_message = err.message || String(err);
     }
-
-    NotificationsModel.create(notificationData);
   },
 
   /**
@@ -176,14 +186,41 @@ var Mailer = {
       'ご不明な点がございましたらご連絡ください。\n' +
       'よろしくお願いいたします。';
 
-    if (enableSend === 'false') return;
+    var notificationData = {
+      company_id: company.company_id,
+      permit_id:  permit.permit_id,
+      to_email:   company.contact_email,
+      cc_email:   '',
+      bcc_email:  adminEmails || '',
+      stage:      'RECEIPT',
+      subject:    subject,
+      body:       body,
+      result:     '',
+      error_message: ''
+    };
+
+    if (enableSend === 'false') {
+      notificationData.result = 'DRY_RUN';
+      NotificationsModel.create(notificationData);
+      return;
+    }
+
+    // 冪等性確保: 先に PENDING でログ記録し、送信後に結果を更新する
+    notificationData.result = 'PENDING';
+    var created = NotificationsModel.create(notificationData);
+    var notificationId = created.notification_id;
 
     try {
       var mailOptions = { subject: subject };
       if (adminEmails) mailOptions.bcc = adminEmails;
 
       GmailApp.sendEmail(company.contact_email, subject, body, mailOptions);
+      NotificationsModel.updateById(notificationId, { result: 'SENT' });
     } catch (err) {
+      NotificationsModel.updateById(notificationId, {
+        result: 'FAILED',
+        error_message: err.message || String(err)
+      });
       logError('sendReceiptConfirmation 送信エラー', err);
     }
   },

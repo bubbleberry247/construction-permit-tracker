@@ -88,6 +88,22 @@ var CompaniesModel = {
     return null;
   },
 
+  findByNameAndEmail: function(companyName, contactEmail) {
+    var sheet = this.getSheet();
+    var rows = sheetToObjects_(sheet);
+    var normName = String(companyName).trim().toLowerCase();
+    var normEmail = String(contactEmail).trim().toLowerCase();
+    for (var i = 0; i < rows.length; i++) {
+      if (
+        String(rows[i].company_name).trim().toLowerCase() === normName &&
+        String(rows[i].contact_email).trim().toLowerCase() === normEmail
+      ) {
+        return rows[i];
+      }
+    }
+    return null;
+  },
+
   findById: function(companyId) {
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
@@ -196,7 +212,7 @@ var PermitsModel = {
 // ─────────────────────────────────────────────────
 
 var SUBMISSIONS_HEADERS = [
-  'submission_id', 'submitted_at', 'company_name_raw', 'contact_email_raw',
+  'submission_id', 'trigger_uid', 'submitted_at', 'company_name_raw', 'contact_email_raw',
   'permit_number_raw', 'expiry_date_raw', 'uploaded_file_drive_id',
   'uploaded_file_url', 'parsed_result', 'error_message'
 ];
@@ -214,6 +230,17 @@ var SubmissionsModel = {
     data.submitted_at = data.submitted_at || new Date();
     appendRow_(sheet, SUBMISSIONS_HEADERS, data);
     return data;
+  },
+
+  findByTriggerUid: function(triggerUid) {
+    var sheet = this.getSheet();
+    var rows = sheetToObjects_(sheet);
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].trigger_uid) === String(triggerUid)) {
+        return rows[i];
+      }
+    }
+    return null;
   },
 
   /**
@@ -260,11 +287,30 @@ var NotificationsModel = {
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
     for (var i = 0; i < rows.length; i++) {
+      var result = String(rows[i].result);
       if (
         String(rows[i].permit_id) === String(permitId) &&
         String(rows[i].stage) === String(stage) &&
-        String(rows[i].result) === 'SENT'
+        (result === 'SENT' || result === 'PENDING')
       ) {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  /**
+   * notification_id で行を検索し、指定カラムを更新する
+   * @param {string} notificationId
+   * @param {Object} data  更新するカラムのオブジェクト（例: { result: 'SENT' }）
+   * @return {boolean} 更新成功なら true
+   */
+  updateById: function(notificationId, data) {
+    var sheet = this.getSheet();
+    var rows = sheetToObjects_(sheet);
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].notification_id) === String(notificationId)) {
+        updateRow_(sheet, rows[i]._row, NOTIFICATIONS_HEADERS, data);
         return true;
       }
     }
