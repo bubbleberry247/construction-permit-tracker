@@ -173,6 +173,7 @@ def fetch_pdf_attachments(
     inbox_dir: Path,
     log_path: Path,
     label_id: str,
+    label_name: str,
     max_messages: int,
     dry_run: bool,
 ) -> int:
@@ -184,10 +185,11 @@ def fetch_pdf_attachments(
     logger.info("既処理ペア数: %d", len(processed_pairs))
 
     # 未処理メール検索（PDFを含む、処理済みラベルなし）
-    query = f'has:attachment filename:.pdf -label:"{label_id}"'
+    # Gmail query は label_name（表示名）で除外する。label_id は addLabelIds 専用
+    query = f'has:attachment filename:.pdf -label:"{label_name}"'
     response = service.users().messages().list(
         userId="me",
-        q='has:attachment filename:.pdf',
+        q=query,
         maxResults=max_messages,
     ).execute()
     messages = response.get("messages", [])
@@ -347,6 +349,7 @@ def main() -> None:
         inbox_dir=inbox_dir,
         log_path=log_path,
         label_id=label_id,
+        label_name=label_name,
         max_messages=max_messages,
         dry_run=args.dry_run,
     )
