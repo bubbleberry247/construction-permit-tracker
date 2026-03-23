@@ -65,12 +65,12 @@ var Mailer = {
     var stageMessage = this._getStageMessage(stage);
 
     var body =
-      company.company_name + ' ' + (company.contact_person || '') + ' 様\n\n' +
+      (company.company_name_normalized || company.company_name_raw) + ' ' + (company.contact_person || '') + ' 様\n\n' +
       'いつもお世話になっております。\n' +
       '建設業許可証の更新に関してご連絡いたします。\n\n' +
       '■ 許可証情報\n' +
-      '　会社名：' + company.company_name + '\n' +
-      '　許可番号：' + permit.permit_number + '\n' +
+      '　会社名：' + (company.company_name_normalized || company.company_name_raw) + '\n' +
+      '　許可番号：' + permit.permit_number_full + '\n' +
       '　満了日：' + expiryDateStr + '\n\n' +
       '■ ご連絡内容\n' +
       stageMessage + '\n\n' +
@@ -157,7 +157,7 @@ var Mailer = {
       'yyyy/MM/dd'
     );
 
-    var subject = '【受領確認】建設業許可証を受領しました（' + company.company_name + '）';
+    var subject = '【受領確認】建設業許可証を受領しました（' + (company.company_name_normalized || company.company_name_raw) + '）';
 
     // 次回通知予定ステージを算出
     var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '120,90,60,45,30,14,0';
@@ -175,11 +175,11 @@ var Mailer = {
     }
 
     var body =
-      company.company_name + ' ' + (company.contact_person || '') + ' 様\n\n' +
+      (company.company_name_normalized || company.company_name_raw) + ' ' + (company.contact_person || '') + ' 様\n\n' +
       'この度は建設業許可証をご提出いただきありがとうございます。\n' +
       '以下の内容で受領いたしましたのでご確認ください。\n\n' +
       '■ 受領内容\n' +
-      '　許可番号：' + permit.permit_number + '\n' +
+      '　許可番号：' + permit.permit_number_full + '\n' +
       '　満了日：' + expiryDateStr + '\n\n' +
       '■ 次回通知予定\n' +
       '　' + nextStage + '\n\n' +
@@ -276,14 +276,14 @@ var Mailer = {
 
     nearExpiry.forEach(function(p) {
       var company = CompaniesModel.findById(p.company_id);
-      var companyName = company ? company.company_name : p.company_id;
+      var companyName = company ? (company.company_name_normalized || company.company_name_raw) : p.company_id;
       var expiryStr = formatDate(
         p.expiry_date instanceof Date ? p.expiry_date : parseDate(p.expiry_date),
         'yyyy/MM/dd'
       );
       var d = daysUntil(p.expiry_date);
       var daysStr = isNaN(d) ? '不明' : (d < 0 ? '期限切れ(' + Math.abs(d) + '日経過)' : d + '日');
-      lines.push([companyName, p.permit_number, expiryStr, daysStr, p.status || ''].join('\t'));
+      lines.push([companyName, p.permit_number_full, expiryStr, daysStr, p.current_status || ''].join('\t'));
     });
 
     var body = lines.join('\n');

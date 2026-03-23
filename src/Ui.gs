@@ -15,6 +15,8 @@ function onOpen() {
     .addItem('会社ビュー更新', 'refreshCompanyViewMenu')
     .addSeparator()
     .addItem('シートヘッダ初期化', 'initSheetHeaders')
+    .addSeparator()
+    .addItem('日次トリガー設定（毎朝8時）', 'setupDailyTrigger')
     .addToUi();
 }
 
@@ -68,6 +70,36 @@ function refreshCompanyViewMenu() {
   } catch (err) {
     ui.alert('エラー', '会社ビューの更新中にエラーが発生しました:\n' + err.message, ui.ButtonSet.OK);
   }
+}
+
+/**
+ * runDailyNotifications の time-driven トリガーを設定する（毎朝8時）
+ * 既存の同名トリガーがある場合は先に削除して重複を防ぐ
+ */
+function setupDailyTrigger() {
+  var ui = SpreadsheetApp.getUi();
+  var FUNCTION_NAME = 'runDailyNotifications';
+
+  // 既存トリガーを削除
+  var triggers = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  triggers.forEach(function(t) {
+    if (t.getHandlerFunction() === FUNCTION_NAME) {
+      ScriptApp.deleteTrigger(t);
+      removed++;
+    }
+  });
+
+  // 新規トリガー作成（毎日 8:00〜9:00 の間に実行）
+  ScriptApp.newTrigger(FUNCTION_NAME)
+    .timeBased()
+    .everyDays(1)
+    .atHour(8)
+    .create();
+
+  var msg = '日次トリガーを設定しました（毎朝8時実行）。';
+  if (removed > 0) msg += '\n既存トリガー ' + removed + ' 件を削除しました。';
+  ui.alert('トリガー設定完了', msg, ui.ButtonSet.OK);
 }
 
 /**
