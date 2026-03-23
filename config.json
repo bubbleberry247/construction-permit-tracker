@@ -1,0 +1,17 @@
+{
+  "_comment": "建設業許可証管理システム 設定ファイル。APIキーはパスのみ記載し、実値は別ファイルに保管すること。",
+  "DATA_ROOT": "C:\\ProgramData\\Generative AI\\Github\\construction-permit-tracker",
+  "OPENAI_MODEL": "gpt-4o",
+  "OPENAI_API_KEY_FILE": "C:\\ProgramData\\RK10\\credentials\\openai_api_key.txt",
+  "GOOGLE_CREDENTIALS_FILE": "C:\\ProgramData\\RK10\\credentials\\google_oauth2_credentials.json",
+  "GOOGLE_SHEETS_ID": "",
+  "GMAIL_ADDRESS": "shinsei.tic@gmail.com",
+  "GMAIL_LABEL_PROCESSED": "許可証処理済み",
+  "GMAIL_FETCH_MAX": 50,
+  "OCR_CONFIDENCE_THRESHOLD_LOW": 0.30,
+  "OCR_CONFIDENCE_THRESHOLD_REVIEW": 0.60,
+  "RETRY_MAX": 3,
+  "RETRY_BASE_DELAY_SEC": 1.0,
+  "STAGING_CSV_DIR": "output",
+  "LOG_LEVEL": "INFO"
+}

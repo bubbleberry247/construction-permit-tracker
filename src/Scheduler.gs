@@ -31,6 +31,13 @@ function runDailyNotifications() {
       }
     });
 
+    // 3. CompanyView シート更新（会社別集約ビュー）
+    try {
+      refreshCompanyView();
+    } catch (err) {
+      logError('CompanyView更新エラー', err);
+    }
+
     // 5. 月曜のみ週次サマリー送信
     if (isTodayDayOfWeek(1)) {
       Mailer.sendWeeklySummary();
@@ -94,41 +101,43 @@ function determineStage_(days, stageDays, permitId) {
 }
 
 /**
- * permit のステータスを days に応じて更新する
+ * permit の current_status を days に応じて更新する
  * @param {Object} permit
- * @param {number} days
+ * @param {number} days  満了日までの日数（負=満了超過）
  */
 function updatePermitStatus_(permit, days) {
-  var currentStatus = String(permit.status || '').toUpperCase();
+  var currentStatus = String(permit.current_status || '').toUpperCase();
   var newStatus = null;
-  var evidenceSubmitted = permit.evidence_renewal_application === true ||
-                          String(permit.evidence_renewal_application).toLowerCase() === 'true';
+
+  // みなし有効の条件: 証拠書類あり + 申請日が有効期限内 + 満了超過
+  var evidenceOk = permit.evidence_renewal_application === true ||
+                   String(permit.evidence_renewal_application).toLowerCase() === 'true';
+  var evidenceFileOk = permit.evidence_file_path && String(permit.evidence_file_path).trim() !== '';
+  var appDate = permit.renewal_application_date ? new Date(permit.renewal_application_date) : null;
+  var expiryDate = permit.expiry_date ? new Date(permit.expiry_date) : null;
+  var appBeforeExpiry = appDate && expiryDate && appDate <= expiryDate;
 
   if (days < 0) {
-    if (evidenceSubmitted) {
-      newStatus = 'RENEWAL_IN_PROGRESS';
+    if (evidenceOk && evidenceFileOk && appBeforeExpiry) {
+      newStatus = 'RENEWAL_IN_PROGRESS';  // みなし有効（発注継続OK）
     } else {
       newStatus = 'EXPIRED';
     }
-  } else if (days <= 30) {
-    newStatus = 'EXPIRING';
   } else {
-    // days > 30 の場合、RENEWAL_IN_PROGRESS は維持
-    if (currentStatus !== 'RENEWAL_IN_PROGRESS') {
+    var renewal_days = permit.renewal_deadline_date
+        ? Math.floor((new Date(permit.renewal_deadline_date) - new Date()) / 86400000)
+        : null;
+    if (renewal_days !== null && renewal_days < 0) {
+      newStatus = 'RENEWAL_OVERDUE';
+    } else if (days <= 90) {
+      newStatus = 'EXPIRING';
+    } else {
       newStatus = 'VALID';
     }
   }
 
   if (newStatus && newStatus !== currentStatus) {
-    PermitsModel.update(permit.permit_id, {
-      status:            newStatus,
-      last_checked_date: new Date()
-    });
-  } else {
-    // ステータス変更なしでも last_checked_date だけ更新
-    PermitsModel.update(permit.permit_id, {
-      last_checked_date: new Date()
-    });
+    PermitsModel.update(permit.permit_id, { current_status: newStatus });
   }
 }
 

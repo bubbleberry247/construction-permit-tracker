@@ -65,7 +65,8 @@ function updateRow_(sheet, rowNum, headers, data) {
 // ─────────────────────────────────────────────────
 
 var COMPANIES_HEADERS = [
-  'company_id', 'company_name', 'representative_name', 'contact_person',
+  'company_id', 'company_name_raw', 'company_name_normalized',
+  'representative_name', 'contact_person',
   'contact_email', 'contact_email_cc', 'phone', 'status', 'created_at', 'updated_at'
 ];
 
@@ -76,28 +77,20 @@ var CompaniesModel = {
     return sheet;
   },
 
-  findByName: function(companyName) {
+  /**
+   * 正規化済み会社名（またはraw名）で会社を検索する
+   * 完全一致を優先し、部分一致（substring）もフォールバックとして許容する。
+   * 部分一致は意図的な仕様: 入力が「〇〇建設」で登録名が「株式会社〇〇建設」のケースを救済するため。
+   * @param {string} normalizedName  検索する会社名（正規化済み）
+   * @return {Object|null}
+   */
+  findByNormalizedName: function(normalizedName) {
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
-    var lowerName = String(companyName).toLowerCase();
+    var queryName = String(normalizedName).toLowerCase();
     for (var i = 0; i < rows.length; i++) {
-      if (String(rows[i].company_name).toLowerCase().indexOf(lowerName) !== -1) {
-        return rows[i];
-      }
-    }
-    return null;
-  },
-
-  findByNameAndEmail: function(companyName, contactEmail) {
-    var sheet = this.getSheet();
-    var rows = sheetToObjects_(sheet);
-    var normName = String(companyName).trim().toLowerCase();
-    var normEmail = String(contactEmail).trim().toLowerCase();
-    for (var i = 0; i < rows.length; i++) {
-      if (
-        String(rows[i].company_name).trim().toLowerCase() === normName &&
-        String(rows[i].contact_email).trim().toLowerCase() === normEmail
-      ) {
+      var stored = String(rows[i].company_name_normalized || rows[i].company_name_raw || '').toLowerCase();
+      if (stored === queryName || stored.indexOf(queryName) !== -1) {
         return rows[i];
       }
     }
@@ -119,6 +112,7 @@ var CompaniesModel = {
     var sheet = this.getSheet();
     var now = new Date();
     data.company_id = data.company_id || generateUuid();
+    data.status = data.status || 'ACTIVE';
     data.created_at = now;
     data.updated_at = now;
     appendRow_(sheet, COMPANIES_HEADERS, data);
@@ -144,12 +138,16 @@ var CompaniesModel = {
 // ─────────────────────────────────────────────────
 
 var PERMITS_HEADERS = [
-  'permit_id', 'company_id', 'permit_number', 'governor_or_minister',
-  'general_or_specific', 'permit_type_code', 'trade_categories',
-  'issue_date', 'expiry_date', 'renewal_deadline_date', 'status',
-  'last_received_date', 'last_checked_date', 'evidence_renewal_application',
-  'evidence_file_url', 'permit_file_url', 'permit_file_drive_id',
-  'permit_file_version', 'note', 'created_at', 'updated_at'
+  'permit_id', 'company_id', 'company_name_raw',
+  'permit_authority_name', 'permit_authority_name_normalized', 'permit_authority_type', 'permit_category',
+  'permit_year', 'contractor_number', 'permit_number_full',
+  'trade_categories', 'issue_date', 'expiry_date', 'renewal_deadline_date',
+  'current_status', 'evidence_renewal_application', 'renewal_application_date',
+  'mlit_confirmed_date', 'mlit_confirm_result', 'mlit_screenshot_url',
+  'permit_file_path', 'permit_file_share_url', 'permit_file_version', 'evidence_file_path',
+  'last_received_date', 'source_file', 'source_file_hash',
+  'parse_status', 'error_category', 'error_reason',
+  'note', 'created_at', 'updated_at'
 ];
 
 var PermitsModel = {
@@ -174,10 +172,40 @@ var PermitsModel = {
     return null;
   },
 
+  /**
+   * upsertキー（company_id + permit_authority_name_normalized + contractor_number + permit_category）で検索
+   * @param {string} companyId
+   * @param {string} permitAuthorityNameNormalized  正規化済み行政庁名（「愛知県知事」等）
+   * @param {string} contractorNumber  業者番号
+   * @param {string} permitCategory  「一般」or「特定」
+   * @return {Object|null}
+   */
+  findByUpsertKey: function(companyId, permitAuthorityNameNormalized, contractorNumber, permitCategory) {
+    var sheet = this.getSheet();
+    var rows = sheetToObjects_(sheet);
+    var normNum = String(contractorNumber).trim();
+    var normAuth = String(permitAuthorityNameNormalized).trim();
+    var normCat = String(permitCategory).trim();
+    for (var i = 0; i < rows.length; i++) {
+      if (
+        String(rows[i].company_id) === String(companyId) &&
+        String(rows[i].permit_authority_name_normalized).trim() === normAuth &&
+        String(rows[i].contractor_number).trim() === normNum &&
+        String(rows[i].permit_category).trim() === normCat
+      ) {
+        return rows[i];
+      }
+    }
+    return null;
+  },
+
   create: function(data) {
     var sheet = this.getSheet();
     var now = new Date();
     data.permit_id = data.permit_id || generateUuid();
+    data.current_status = data.current_status || 'VALID';
+    data.evidence_renewal_application = data.evidence_renewal_application || false;
+    data.parse_status = data.parse_status || 'OK';
     data.permit_file_version = data.permit_file_version || 1;
     data.created_at = now;
     data.updated_at = now;
@@ -202,7 +230,7 @@ var PermitsModel = {
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
     return rows.filter(function(r) {
-      return String(r.status).toUpperCase() !== 'EXPIRED';
+      return String(r.current_status).toUpperCase() !== 'EXPIRED';
     });
   }
 };
@@ -334,5 +362,71 @@ var NotificationsModel = {
       }
     });
     return count;
+  }
+};
+
+// ─────────────────────────────────────────────────
+// DocumentChecklistModel
+// ─────────────────────────────────────────────────
+
+var DOCUMENT_CHECKLIST_HEADERS = [
+  'check_id', 'company_id', 'submission_date',
+  '新規継続取引申請書', '建設業許可証', '決算書前年度', '決算書前々年度',
+  '会社案内', '工事経歴書', '取引先一覧表', '労働安全衛生誓約書',
+  '資格略字一覧', '労働者名簿一覧表', '個人事業主_青色申告書',
+  'source_pdf_url', 'llm_classification_raw', 'created_at', 'updated_at'
+];
+
+var DocumentChecklistModel = {
+  getSheet: function() {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('DocumentChecklist');
+    if (!sheet) throw new Error('DocumentChecklistシートが見つかりません');
+    return sheet;
+  },
+
+  create: function(data) {
+    var sheet = this.getSheet();
+    var now = new Date();
+    data.check_id = data.check_id || generateUuid();
+    data.created_at = now;
+    data.updated_at = now;
+    appendRow_(sheet, DOCUMENT_CHECKLIST_HEADERS, data);
+    return data;
+  },
+
+  findByCompanyAndDate: function(companyId, submissionDate) {
+    var sheet = this.getSheet();
+    var rows = sheetToObjects_(sheet);
+    var normDate = String(submissionDate).trim();
+    for (var i = 0; i < rows.length; i++) {
+      if (
+        String(rows[i].company_id) === String(companyId) &&
+        String(rows[i].submission_date).trim() === normDate
+      ) {
+        return rows[i];
+      }
+    }
+    return null;
+  },
+
+  getMissingDocuments: function(companyId) {
+    var REQUIRED_DOCS = [
+      '新規継続取引申請書', '建設業許可証', '決算書前年度', '会社案内',
+      '工事経歴書', '取引先一覧表', '労働安全衛生誓約書'
+    ];
+    var sheet = this.getSheet();
+    var rows = sheetToObjects_(sheet);
+    var companyRows = rows.filter(function(r) {
+      return String(r.company_id) === String(companyId);
+    });
+    if (companyRows.length === 0) return REQUIRED_DOCS.slice();
+    // 最新提出日の行を使用
+    companyRows.sort(function(a, b) {
+      return new Date(b.submission_date) - new Date(a.submission_date);
+    });
+    var latest = companyRows[0];
+    return REQUIRED_DOCS.filter(function(doc) {
+      return !latest[doc] || String(latest[doc]).toUpperCase() !== 'TRUE';
+    });
   }
 };

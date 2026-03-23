@@ -3,4 +3,25 @@
 node_modules/
 .DS_Store
 
+# 認証情報・秘密情報
+config.local.json
+*credentials*.json
+*api_key*.txt
+*.env
+
+# データ・ログ
+data/
 logs/
+output/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# テスト結果（バイナリ相当の大容量ファイル）
+tests/results_*.json
+tests/ocr_benchmark_results*.csv
+
+# 内部計画ドキュメント
+plans/
