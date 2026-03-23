@@ -33,7 +33,7 @@ from utils.wareki_convert import wareki_to_date, wareki_to_iso  # noqa: E402
 from utils.permit_parser import parse_permit_number  # noqa: E402
 from utils.trade_master import normalize_trade_list, TRADE_CATEGORIES  # noqa: E402
 from ocr_permit import normalize_authority_name, estimate_confidence, match_company  # noqa: E402
-from ocr_permit import _PREFECTURE_SUFFIX  # noqa: E402
+from ocr_permit import _PREFECTURE_SUFFIX, is_valid_authority_name  # noqa: E402
 from register_sheets import _is_blank, determine_current_status  # noqa: E402
 from mlit_confirm import _a1  # noqa: E402
 
@@ -356,6 +356,38 @@ class TestNormalizeAuthorityName:
         for short, full_pref in _PREFECTURE_SUFFIX.items():
             result = normalize_authority_name(f"{short}知事")
             assert result == f"{full_pref}知事", f"Failed for: {short}"
+
+
+# ===========================================================================
+# is_valid_authority_name  (upsert キー安全性の回帰テスト)
+# ===========================================================================
+class TestIsValidAuthorityName:
+    """normalize_authority_name の結果が既知の正式表記かを検証する。
+    OCR誤字で正規化できなかった場合にTIER3_AUTH_NAME_UNKNOWNが発火する設計の前提。"""
+
+    def test_known_prefecture_valid(self):
+        assert is_valid_authority_name("愛知県知事") is True
+
+    def test_all_47_prefectures_valid(self):
+        for short, full in _PREFECTURE_SUFFIX.items():
+            assert is_valid_authority_name(f"{full}知事") is True, f"Failed: {full}知事"
+
+    def test_minister_valid(self):
+        assert is_valid_authority_name("国土交通大臣") is True
+
+    def test_ocr_typo_invalid(self):
+        """OCR誤字（「懸」vs「県」）は invalid → TIER3_AUTH_NAME_UNKNOWN 発火が期待される"""
+        assert is_valid_authority_name("愛知懸知事") is False
+
+    def test_short_form_invalid(self):
+        """短縮形（正規化前の値）は invalid"""
+        assert is_valid_authority_name("愛知知事") is False
+
+    def test_empty_string_invalid(self):
+        assert is_valid_authority_name("") is False
+
+    def test_garbage_invalid(self):
+        assert is_valid_authority_name("不明な行政庁") is False
 
 
 # ===========================================================================

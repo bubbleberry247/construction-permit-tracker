@@ -56,6 +56,7 @@ TIER3_UNKNOWN_COMPANY = "TIER3_UNKNOWN_COMPANY"
 TIER3_AMBIGUOUS_COMPANY = "TIER3_AMBIGUOUS_COMPANY"
 TIER3_DATE_PARSE = "TIER3_DATE_PARSE"
 TIER3_TRADE_MISMATCH = "TIER3_TRADE_MISMATCH"
+TIER3_AUTH_NAME_UNKNOWN = "TIER3_AUTH_NAME_UNKNOWN"
 
 # ---------------------------------------------------------------------------
 # Staging CSV columns (order matters)
@@ -331,6 +332,17 @@ def normalize_authority_name(raw: str) -> str:
     return name  # 上記パターン外はそのまま（大臣許可・特殊ケース）
 
 
+# 正規化済み行政庁名として受け入れられる形式かチェック
+_VALID_AUTHORITY_NAMES: frozenset[str] = frozenset(
+    [f"{v}知事" for v in _PREFECTURE_SUFFIX.values()] + ["国土交通大臣"]
+)
+
+
+def is_valid_authority_name(name: str) -> bool:
+    """normalize_authority_name の出力が既知の正式表記かどうかを返す。"""
+    return name in _VALID_AUTHORITY_NAMES
+
+
 # ---------------------------------------------------------------------------
 # Confidence estimation
 # ---------------------------------------------------------------------------
@@ -513,6 +525,17 @@ def _map_extracted_fields(
         )
     else:
         logger.warning("[%s] 許可番号パース失敗: %s", pdf_name, permit_parse.parse_warnings)
+
+    # 行政庁名の正規化結果が既知形式でなければ TIER3 に落とす
+    # （OCR誤字等でupsertキーが揺れ、重複登録を起こすリスクを予防）
+    auth_normalized = result.get("permit_authority_name_normalized", "")
+    if auth_normalized and not is_valid_authority_name(auth_normalized):
+        result["error_category"] = TIER3_AUTH_NAME_UNKNOWN
+        result["error_reason"] = (
+            f"行政庁名を既知の47都道府県知事/国土交通大臣に正規化できませんでした: "
+            f"'{result.get('permit_authority_name')}' → '{auth_normalized}'"
+        )
+        logger.warning("[%s] %s: %s", pdf_name, TIER3_AUTH_NAME_UNKNOWN, result["error_reason"])
 
 
 # ---------------------------------------------------------------------------
