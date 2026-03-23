@@ -224,6 +224,36 @@ class TestMatchCompany:
 from register_sheets import _is_blank, determine_current_status  # noqa: E402
 
 
+# ---------------------------------------------------------------------------
+# mlit_confirm: _a1 (batch_update range 記法の回帰テスト)
+# ---------------------------------------------------------------------------
+from mlit_confirm import _a1  # noqa: E402
+
+
+class TestA1Notation:
+    """gspread batch_update は A1 記法のみサポート（R1C1 は INVALID_ARGUMENT）。回帰テスト。"""
+
+    def test_a1_col_a(self):
+        assert _a1(1, 1) == "A1"
+
+    def test_a1_col_z(self):
+        assert _a1(2, 26) == "Z2"
+
+    def test_a1_col_aa(self):
+        assert _a1(3, 27) == "AA3"
+
+    def test_mlit_typical_row(self):
+        # Permits シートは33列。mlit_confirmed_date=18列目, mlit_confirm_result=19列目
+        assert _a1(5, 18) == "R5"
+        assert _a1(5, 19) == "S5"
+
+    def test_no_r1c1_format(self):
+        """R{n}C{n} 形式になっていないことを確認"""
+        result = _a1(2, 3)
+        assert not result.startswith("R") or not "C" in result or result[1:].isdigit()
+        assert result == "C2"
+
+
 class TestIsBlank:
     def test_none(self):
         assert _is_blank(None) is True

@@ -332,6 +332,16 @@ def confirm_permit_with_playwright(
 # Google Sheets への結果書き戻し
 # ---------------------------------------------------------------------------
 
+def _a1(row: int, col: int) -> str:
+    """1-based (row, col) を A1 記法に変換する（例: (2, 18) → 'R2'）。"""
+    result = ""
+    c = col
+    while c > 0:
+        c, rem = divmod(c - 1, 26)
+        result = chr(65 + rem) + result
+    return f"{result}{row}"
+
+
 def update_permit_mlit_result(
     client: Any,
     sheets_id: str,
@@ -364,11 +374,12 @@ def update_permit_mlit_result(
         for row_idx, row in enumerate(all_values[1:], start=2):
             cell_val = row[pid_i].strip() if pid_i < len(row) else ""
             if cell_val == permit_id.strip():
-                # 3フィールドを1回の sheet.update で更新（整合性確保 + API呼び出し削減）
+                # 3フィールドを1回の batch_update で更新（整合性確保 + API呼び出し削減）
+                # gspread は A1 記法のみサポート（R1C1 は INVALID_ARGUMENT になる）
                 updates = [
-                    {"range": f"R{row_idx}C{date_i + 1}",     "values": [[confirmed_date]]},
-                    {"range": f"R{row_idx}C{result_i + 1}",   "values": [[confirm_result]]},
-                    {"range": f"R{row_idx}C{screenshot_i + 1}", "values": [[screenshot_path]]},
+                    {"range": _a1(row_idx, date_i + 1),       "values": [[confirmed_date]]},
+                    {"range": _a1(row_idx, result_i + 1),     "values": [[confirm_result]]},
+                    {"range": _a1(row_idx, screenshot_i + 1), "values": [[screenshot_path]]},
                 ]
                 call_with_retry(
                     lambda u=updates: sheet.batch_update(u),
