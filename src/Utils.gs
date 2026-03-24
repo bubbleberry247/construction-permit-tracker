@@ -100,6 +100,39 @@ function isTodayDayOfWeek(dayOfWeek) {
 }
 
 /**
+ * 行政庁名を正規化する（Python側 normalize_authority_name と同等）
+ * 「愛知知事」→「愛知県知事」、「国土交通大臣」はそのまま
+ * @param {string} rawName  parsePermitNumber_ が返す permit_authority_name
+ * @return {string}  正規化済み行政庁名
+ */
+function normalizeAuthorityName_(rawName) {
+  if (!rawName) return '';
+  var s = String(rawName).trim();
+  // 大臣許可はそのまま
+  if (s.indexOf('大臣') !== -1) return '国土交通大臣';
+  // 北海道は「県」不要
+  if (s.indexOf('北海道') !== -1) return '北海道知事';
+  // 都・道・府・県 がすでに付いていれば「知事」を補完して返す
+  if (/[都道府県]知事/.test(s)) return s;
+  // 「県」が抜けているケース（「愛知知事」→「愛知県知事」）
+  // 末尾が「知事」なら間に「県」を挿入
+  var m = s.match(/^(.+?)知事$/);
+  if (m) {
+    var pref = m[1];
+    // 東京都・大阪府・京都府・北海道は特殊
+    if (pref === '東京' || pref === '東京都') return '東京都知事';
+    if (pref === '大阪' || pref === '大阪府') return '大阪府知事';
+    if (pref === '京都' || pref === '京都府') return '京都府知事';
+    // すでに都道府県が付いていればそのまま
+    if (/[都道府県]$/.test(pref)) return pref + '知事';
+    // 付いていなければ「県」を補完
+    return pref + '県知事';
+  }
+  // パターン外は素通し
+  return s;
+}
+
+/**
  * 建設業許可番号文字列をパースして構造化データを返す
  * Python側 permit_parser.py と同等ロジック
  * @param {string} text  例: "愛知県知事 許可（特一 6）第57805号"

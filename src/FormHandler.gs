@@ -84,10 +84,15 @@ function onFormSubmit(e) {
 
     // 許可番号をパースして構造化データを取得
     var parsed = parsePermitNumber_(permitNumberRaw);
-    var contractorNumber = parsed.parse_success ? parsed.contractor_number : '';
-    var permitAuthorityName = parsed.parse_success ? parsed.permit_authority_name : '';
-    var permitCategory = generalOrSpec || (parsed.parse_success ? parsed.permit_category : '');
-    var permitYear = parsed.parse_success ? parsed.permit_year : 0;
+    if (!parsed.parse_success) {
+      throw new Error('許可番号のパースに失敗しました: "' + permitNumberRaw + '"');
+    }
+    var contractorNumber = parsed.contractor_number;
+    var permitAuthorityName = parsed.permit_authority_name;
+    // upsertキーに使う正規化済み行政庁名（「愛知知事」→「愛知県知事」等）
+    var permitAuthorityNameNormalized = normalizeAuthorityName_(permitAuthorityName);
+    var permitCategory = generalOrSpec || parsed.permit_category;
+    var permitYear = parsed.permit_year;
 
     // 4. Submissions に詳細を更新（パース成功フラグ）
     // （最終的に OK/NG で上書きする）
@@ -113,7 +118,7 @@ function onFormSubmit(e) {
     var companyId = company.company_id;
 
     // 6. Permit を検索・更新 or 新規作成（upsertキーで検索）
-    var existingPermit = PermitsModel.findByUpsertKey(companyId, permitAuthorityName, contractorNumber, permitCategory);
+    var existingPermit = PermitsModel.findByUpsertKey(companyId, permitAuthorityNameNormalized, contractorNumber, permitCategory);
     var permitId;
     var permitVersion;
 
@@ -133,7 +138,7 @@ function onFormSubmit(e) {
       PermitsModel.update(permitId, {
         contact_person:                  contactPerson,
         permit_authority_name:           permitAuthorityName,
-        permit_authority_name_normalized: permitAuthorityName,
+        permit_authority_name_normalized: permitAuthorityNameNormalized,
         permit_authority_type:           governorOrMin,
         permit_category:                 permitCategory,
         contractor_number:               contractorNumber,
@@ -154,7 +159,7 @@ function onFormSubmit(e) {
         company_name_raw:                companyNameRaw,
         permit_number_full:              permitNumberRaw,
         permit_authority_name:           permitAuthorityName,
-        permit_authority_name_normalized: permitAuthorityName,
+        permit_authority_name_normalized: permitAuthorityNameNormalized,
         permit_authority_type:           governorOrMin,
         permit_category:                 permitCategory,
         permit_year:                     permitYear,
