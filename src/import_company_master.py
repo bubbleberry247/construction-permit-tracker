@@ -284,7 +284,7 @@ def build_sheets_service(credentials_file: str) -> Any:
     if not creds_path.exists():
         raise FileNotFoundError(
             f"認証情報ファイルが見つかりません: {creds_path}\n"
-            "  config.json の GOOGLE_CREDENTIALS_FILE を確認してください。"
+            "  config.json の GOOGLE_SERVICE_ACCOUNT_FILE を確認してください。"
         )
 
     creds = service_account.Credentials.from_service_account_file(
@@ -339,7 +339,7 @@ def main() -> None:
     # 1. config.json 読み込み
     config = load_config(CONFIG_PATH)
     sheets_id: str = config.get("GOOGLE_SHEETS_ID", "")
-    credentials_file: str = config.get("GOOGLE_CREDENTIALS_FILE", "")
+    credentials_file: str = config.get("GOOGLE_SERVICE_ACCOUNT_FILE", "")
     csv_mode = not sheets_id
 
     if csv_mode:
@@ -399,6 +399,16 @@ def main() -> None:
                 logger.info("Sheets に %d 件追記しました。", new_count)
             else:
                 logger.info("追記対象なし。")
+
+            # CSV も常に出力（ocr_permit.py がローカル CSV を参照するため）
+            try:
+                csv_path = export_csv(records)
+                logger.info(
+                    "CSV 同時出力完了: file:///%s",
+                    str(csv_path).replace("\\", "/"),
+                )
+            except Exception as csv_exc:  # noqa: BLE001
+                logger.warning("CSV 同時出力に失敗しました: %s", csv_exc)
 
         except FileNotFoundError as exc:
             logger.error("%s", exc)

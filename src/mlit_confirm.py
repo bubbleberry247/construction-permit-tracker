@@ -342,6 +342,102 @@ def _a1(row: int, col: int) -> str:
     return f"{result}{row}"
 
 
+def build_permit_row_index(
+    client: Any,
+    sheets_id: str,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> tuple[dict[str, int], dict[str, int], Any] | None:
+    """
+    Permits シートを1回読み込み、permit_id → row_index の辞書を構築する。
+
+    Returns:
+        (permit_id_to_row, col_indices, sheet) のタプル。失敗時は None。
+        - permit_id_to_row: {permit_id: row_index (1-based, ヘッダー含む)}
+        - col_indices: {"date": col, "result": col, "screenshot": col} (1-based)
+        - sheet: gspread Worksheet オブジェクト（batch_update 用）
+    """
+    try:
+        ss = call_with_retry(lambda: client.open_by_key(sheets_id), max_retries, base_delay)
+        sheet = ss.worksheet(PERMITS_SHEET)
+        all_values: list[list[str]] = call_with_retry(lambda: sheet.get_all_values(), max_retries, base_delay)
+
+        if len(all_values) < 2:
+            logger.info("Permits シートにデータが存在しません")
+            return None
+
+        headers = all_values[0]
+        try:
+            pid_i = headers.index("permit_id")
+            date_i = headers.index("mlit_confirmed_date")
+            result_i = headers.index("mlit_confirm_result")
+            screenshot_i = headers.index("mlit_screenshot_url")
+        except ValueError as e:
+            logger.error("Permits シートに必要なカラムがありません: %s", e)
+            return None
+
+        permit_id_to_row: dict[str, int] = {}
+        for row_idx, row in enumerate(all_values[1:], start=2):
+            cell_val = row[pid_i].strip() if pid_i < len(row) else ""
+            if cell_val:
+                permit_id_to_row[cell_val] = row_idx
+
+        col_indices = {
+            "date": date_i + 1,       # 1-based for _a1()
+            "result": result_i + 1,
+            "screenshot": screenshot_i + 1,
+        }
+
+        logger.info("permit_id → row インデックス構築完了: %d 件", len(permit_id_to_row))
+        return permit_id_to_row, col_indices, sheet
+
+    except Exception as exc:
+        logger.error("Permits シート読み込みエラー: %s", exc)
+        return None
+
+
+def batch_update_mlit_results(
+    sheet: Any,
+    col_indices: dict[str, int],
+    results: list[tuple[int, str, str, str]],
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> int:
+    """
+    複数 permit の MLIT 確認結果を1回の batch_update で Sheets に書き戻す。
+
+    Args:
+        sheet: gspread Worksheet オブジェクト
+        col_indices: {"date": col, "result": col, "screenshot": col} (1-based)
+        results: [(row_index, confirmed_date, confirm_result, screenshot_path), ...]
+        max_retries: リトライ回数
+        base_delay: リトライ待機秒数
+
+    Returns:
+        更新成功した行数
+    """
+    if not results:
+        return 0
+
+    updates: list[dict[str, Any]] = []
+    for row_idx, confirmed_date, confirm_result, screenshot_path in results:
+        updates.append({"range": _a1(row_idx, col_indices["date"]),       "values": [[confirmed_date]]})
+        updates.append({"range": _a1(row_idx, col_indices["result"]),     "values": [[confirm_result]]})
+        updates.append({"range": _a1(row_idx, col_indices["screenshot"]), "values": [[screenshot_path]]})
+
+    try:
+        call_with_retry(
+            lambda: sheet.batch_update(updates),
+            max_retries,
+            base_delay,
+        )
+        logger.info("Sheets batch_update 完了: %d 件 (%d セル)", len(results), len(updates))
+        return len(results)
+    except Exception as exc:
+        logger.error("Sheets batch_update エラー: %s", exc)
+        return 0
+
+
 def update_permit_mlit_result(
     client: Any,
     sheets_id: str,
@@ -352,7 +448,12 @@ def update_permit_mlit_result(
     max_retries: int = 3,
     base_delay: float = 1.0,
 ) -> bool:
-    """Permits シートの mlit_confirmed_date と mlit_confirm_result を更新する。"""
+    """Permits シートの mlit_confirmed_date と mlit_confirm_result を更新する。
+
+    注意: この関数は後方互換のために残しているが、main() では
+    build_permit_row_index + batch_update_mlit_results を使用する。
+    1件ずつ呼ぶと毎回 get_all_values() するため O(N²) になる。
+    """
     try:
         ss = call_with_retry(lambda: client.open_by_key(sheets_id), max_retries, base_delay)
         sheet = ss.worksheet(PERMITS_SHEET)
@@ -404,7 +505,7 @@ def main(csv_path: Path | None, dry_run: bool) -> None:
     config = load_config()
     data_root = Path(config.get("DATA_ROOT", str(PROJECT_ROOT)))
     sheets_id: str = config.get("GOOGLE_SHEETS_ID", "")
-    credentials_file: str = config.get("GOOGLE_CREDENTIALS_FILE", "")
+    credentials_file: str = config.get("GOOGLE_SERVICE_ACCOUNT_FILE", "")
     max_retries: int = int(config.get("RETRY_MAX", 3))
     base_delay: float = float(config.get("RETRY_BASE_DELAY_SEC", 1.0))
 
@@ -430,14 +531,27 @@ def main(csv_path: Path | None, dry_run: bool) -> None:
 
     logger.info("確認対象: %d 件 (dry_run=%s)", len(permits), dry_run)
 
-    # Sheets クライアント（書き戻し用）
+    # Sheets クライアント（書き戻し用）— permit_id → row_index を事前構築して O(1) ルックアップ
     sheets_client: Any = None
+    permit_row_index: dict[str, int] | None = None
+    col_indices: dict[str, int] | None = None
+    permit_sheet: Any = None
+
     if not dry_run and sheets_id and csv_path is None:
         sheets_client = get_sheets_client(credentials_file)
+        if sheets_client:
+            index_result = build_permit_row_index(sheets_client, sheets_id, max_retries, base_delay)
+            if index_result is not None:
+                permit_row_index, col_indices, permit_sheet = index_result
+            else:
+                logger.warning("permit_id → row インデックス構築失敗 → Sheets 書き戻しをスキップします")
 
     success = 0
     failed = 0
     today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # 確認結果を収集（ループ後に一括 batch_update）
+    pending_updates: list[tuple[int, str, str, str]] = []
 
     for i, permit in enumerate(permits):
         contractor_number = permit.get("contractor_number", "").strip()
@@ -478,22 +592,13 @@ def main(csv_path: Path | None, dry_run: bool) -> None:
             screenshot_path,
         )
 
-        # Sheets 書き戻し（sheets_client がある場合のみ）
-        if sheets_client and permit_id:
-            updated = update_permit_mlit_result(
-                sheets_client,
-                sheets_id,
-                permit_id,
-                today_str,
-                confirm_result,
-                str(screenshot_path),
-                max_retries,
-                base_delay,
-            )
-            if updated:
-                logger.info("Sheets 更新完了: permit_id=%s", permit_id)
+        # Sheets 書き戻し用に結果を収集（O(1) ルックアップ）
+        if permit_row_index is not None and col_indices is not None and permit_id:
+            row_idx = permit_row_index.get(permit_id)
+            if row_idx is not None:
+                pending_updates.append((row_idx, today_str, confirm_result, str(screenshot_path)))
             else:
-                logger.warning("Sheets 更新スキップ: permit_id=%s", permit_id)
+                logger.warning("permit_id が Sheets で見つかりません: %s", permit_id)
 
         if confirm_result in ("一致", "不一致"):
             success += 1
@@ -504,6 +609,13 @@ def main(csv_path: Path | None, dry_run: bool) -> None:
         if i < len(permits) - 1:
             logger.debug("%.1f 秒ウェイト中...", MLIT_WAIT_SEC)
             time.sleep(MLIT_WAIT_SEC)
+
+    # 全件の確認結果を1回の batch_update で Sheets に書き戻し
+    if pending_updates and permit_sheet is not None and col_indices is not None:
+        updated_count = batch_update_mlit_results(
+            permit_sheet, col_indices, pending_updates, max_retries, base_delay,
+        )
+        logger.info("Sheets 一括更新: %d / %d 件", updated_count, len(pending_updates))
 
     print(
         f"\n=== MLIT 確認結果サマリー ===\n"

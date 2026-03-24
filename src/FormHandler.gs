@@ -82,6 +82,13 @@ function onFormSubmit(e) {
 
     var issueDate = parseDate(issueDateRaw);
 
+    // 許可番号をパースして構造化データを取得
+    var parsed = parsePermitNumber_(permitNumberRaw);
+    var contractorNumber = parsed.parse_success ? parsed.contractor_number : '';
+    var permitAuthorityName = parsed.parse_success ? parsed.permit_authority_name : '';
+    var permitCategory = generalOrSpec || (parsed.parse_success ? parsed.permit_category : '');
+    var permitYear = parsed.parse_success ? parsed.permit_year : 0;
+
     // 4. Submissions に詳細を更新（パース成功フラグ）
     // （最終的に OK/NG で上書きする）
 
@@ -107,8 +114,8 @@ function onFormSubmit(e) {
     }
     var companyId = company.company_id;
 
-    // 6. Permit を検索・更新 or 新規作成
-    var existingPermit = PermitsModel.findByCompanyAndNumber(companyId, permitNumberRaw);
+    // 6. Permit を検索・更新 or 新規作成（upsertキーで検索）
+    var existingPermit = PermitsModel.findByUpsertKey(companyId, permitAuthorityName, contractorNumber, permitCategory);
     var permitId;
     var permitVersion;
 
@@ -126,39 +133,51 @@ function onFormSubmit(e) {
       }
 
       PermitsModel.update(permitId, {
-        permit_authority_type:     governorOrMin,
-        permit_category:           generalOrSpec,
-        trade_categories:          tradeCategories,
-        issue_date:                issueDate || issueDateRaw,
-        expiry_date:               expiryDate,
-        note:                      newNote,
-        permit_file_version:       permitVersion,
-        last_received_date:        submittedAt
+        contact_person:                  contactPerson,
+        permit_authority_name:           permitAuthorityName,
+        permit_authority_name_normalized: permitAuthorityName,
+        permit_authority_type:           governorOrMin,
+        permit_category:                 permitCategory,
+        contractor_number:               contractorNumber,
+        permit_year:                     permitYear,
+        permit_number_full:              permitNumberRaw,
+        trade_categories:                tradeCategories,
+        issue_date:                      issueDate || issueDateRaw,
+        expiry_date:                     expiryDate,
+        note:                            newNote,
+        permit_file_version:             permitVersion,
+        last_received_date:              submittedAt
       });
     } else {
       // 新規許可証
       permitVersion = 1;
       var newPermit = PermitsModel.create({
-        company_id:                companyId,
-        company_name_raw:          companyNameRaw,
-        permit_number_full:        permitNumberRaw,
-        permit_authority_type:     governorOrMin,
-        permit_category:           generalOrSpec,
-        trade_categories:          tradeCategories,
-        issue_date:                issueDate || issueDateRaw,
-        expiry_date:               expiryDate,
-        renewal_deadline_date:     '',
-        current_status:            'VALID',
-        last_received_date:        submittedAt,
-        evidence_renewal_application: false,
-        note:                      noteRaw,
-        permit_file_version:       1
+        company_id:                      companyId,
+        company_name_raw:                companyNameRaw,
+        permit_number_full:              permitNumberRaw,
+        permit_authority_name:           permitAuthorityName,
+        permit_authority_name_normalized: permitAuthorityName,
+        permit_authority_type:           governorOrMin,
+        permit_category:                 permitCategory,
+        permit_year:                     permitYear,
+        contractor_number:               contractorNumber,
+        trade_categories:                tradeCategories,
+        issue_date:                      issueDate || issueDateRaw,
+        expiry_date:                     expiryDate,
+        renewal_deadline_date:           '',
+        current_status:                  'VALID',
+        last_received_date:              submittedAt,
+        evidence_renewal_application:    false,
+        note:                            noteRaw,
+        permit_file_version:             1
       });
       permitId = newPermit.permit_id;
     }
 
     // 7. PDFファイルを Drive に移動・リネーム
     var permitFileUrl = '';
+    var permitFileDriveId = '';
+    var pdfSaveFailed = false;
 
     if (permitFileId) {
       try {
@@ -187,8 +206,28 @@ function onFormSubmit(e) {
         permitFileUrl = permitFile.getUrl();
       } catch (fileErr) {
         logError('PDFファイル移動エラー', fileErr);
-        // ファイル操作失敗でも処理継続（URLは空のまま）
+        pdfSaveFailed = true;
       }
+    }
+
+    // PDF保存失敗時: ユーザーがファイルをアップロードしたのに保存できなかった場合
+    if (pdfSaveFailed) {
+      SubmissionsModel.updateById(submissionId, {
+        parsed_result: 'REVIEW_NEEDED',
+        error_message: 'PDF保存失敗: 手動確認が必要です'
+      });
+
+      sendErrorAlert(
+        'PDF保存失敗 (' + companyNameRaw + ')',
+        '会社名: ' + companyNameRaw + '\n' +
+        '許可番号: ' + permitNumberRaw + '\n' +
+        'アップロードファイルID: ' + permitFileId + '\n' +
+        'PDFファイルのDrive移動・リネームに失敗しました。\n' +
+        '元ファイルがGoogleフォームの回答フォルダに残っている可能性があります。手動で確認してください。'
+      );
+
+      // 受領確認メールは送信しない（ユーザーに「OK」と誤通知しないため）
+      return;
     }
 
     // 更新申請受付票の処理
@@ -199,17 +238,18 @@ function onFormSubmit(e) {
         evidenceFileUrl = evidenceFile.getUrl();
         PermitsModel.update(permitId, {
           evidence_renewal_application: true,
-          evidence_file_path:           evidenceFileUrl  // Drive URL（VPNパス不使用のGASコンテキスト）
+          evidence_file_path:           evidenceFileUrl
         });
       } catch (evErr) {
         logError('受付票ファイル取得エラー', evErr);
       }
     }
 
-    // 8. Permits に permit_file_share_url 更新（Drive URL）
-    if (permitFileUrl) {
+    // 8. Permits に permit_file_share_url / permit_file_path 更新
+    if (permitFileUrl || permitFileDriveId) {
       PermitsModel.update(permitId, {
-        permit_file_share_url: permitFileUrl
+        permit_file_share_url: permitFileUrl,
+        permit_file_path:      permitFileDriveId
       });
     }
 

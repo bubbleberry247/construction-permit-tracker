@@ -98,3 +98,53 @@ function isTodayDayOfWeek(dayOfWeek) {
   var now = new Date();
   return now.getDay() === dayOfWeek;
 }
+
+/**
+ * 建設業許可番号文字列をパースして構造化データを返す
+ * Python側 permit_parser.py と同等ロジック
+ * @param {string} text  例: "愛知県知事 許可（特一 6）第57805号"
+ * @return {{permit_authority_name: string, permit_authority_type: string,
+ *           permit_category: string, permit_year: number,
+ *           contractor_number: string, permit_number_full: string,
+ *           parse_success: boolean}}
+ */
+function parsePermitNumber_(text) {
+  var empty = {
+    permit_authority_name: '', permit_authority_type: '',
+    permit_category: '', permit_year: 0,
+    contractor_number: '', permit_number_full: String(text || ''),
+    parse_success: false
+  };
+  if (!text || typeof text !== 'string' || !text.trim()) return empty;
+
+  // 全角→半角 正規化
+  var s = text.trim()
+    .replace(/（/g, '(').replace(/）/g, ')')
+    .replace(/　/g, ' ')
+    .replace(/[０-９]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); });
+
+  var pattern = /(.+?)\s*許可\s*\(\s*(特一|般一|特定|一般|特|一|般)[\s\-\u2010\u2012\u2013\u2014\u2015\uFF0D\uFF70]+(\d+)\s*\)\s*第\s*(\d+)\s*号/;
+  var m = s.match(pattern);
+  if (!m) return empty;
+
+  var rawAuth = m[1].trim();
+  var rawCat = m[2].trim();
+  var rawYear = m[3];
+  var rawNum = m[4];
+
+  var authorityType = rawAuth.indexOf('大臣') !== -1 ? '大臣' : '知事';
+
+  var catMap = { '特一': '特定', '特定': '特定', '特': '特定',
+                 '般一': '一般', '一般': '一般', '一': '一般', '般': '一般' };
+  var category = catMap[rawCat] || (rawCat.indexOf('特') !== -1 ? '特定' : '一般');
+
+  return {
+    permit_authority_name: rawAuth,
+    permit_authority_type: authorityType,
+    permit_category: category,
+    permit_year: parseInt(rawYear, 10) || 0,
+    contractor_number: rawNum.trim(),
+    permit_number_full: text,
+    parse_success: true
+  };
+}

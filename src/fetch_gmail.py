@@ -84,7 +84,7 @@ def get_gmail_service(credentials_file: str, token_cache: Path):
         else:
             logger.info("Gmail OAuth2 認証を開始します（ブラウザが開きます）...")
             flow = InstalledAppFlow.from_client_secrets_file(credentials_file, GMAIL_SCOPES)
-            creds = flow.run_local_server(port=0)
+            creds = flow.run_local_server(port=0, access_type='offline', prompt='consent')
 
         token_cache.parent.mkdir(parents=True, exist_ok=True)
         token_cache.write_text(creds.to_json(), encoding="utf-8")

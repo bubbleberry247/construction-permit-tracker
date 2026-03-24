@@ -4,6 +4,7 @@
   "OPENAI_MODEL": "gpt-4o",
   "OPENAI_API_KEY_FILE": "C:\\ProgramData\\RK10\\credentials\\openai_api_key.txt",
   "GOOGLE_CREDENTIALS_FILE": "C:\\ProgramData\\RK10\\credentials\\google_oauth2_credentials.json",
+  "GOOGLE_SERVICE_ACCOUNT_FILE": "C:\\ProgramData\\RK10\\credentials\\google_service_account.json",
   "GOOGLE_SHEETS_ID": "",
   "GMAIL_ADDRESS": "shinsei.tic@gmail.com",
   "GMAIL_LABEL_PROCESSED": "許可証処理済み",

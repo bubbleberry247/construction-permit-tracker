@@ -11,6 +11,20 @@ var DATA_START_ROW = 2;
 // ─────────────────────────────────────────────────
 
 /**
+ * スプレッドシート式インジェクション対策
+ * 先頭が =, +, -, @ の文字列にはプレフィクス ' を付与
+ */
+function sanitizeForSheet_(value) {
+  if (typeof value !== 'string') return value;
+  if (value.length === 0) return value;
+  var firstChar = value.charAt(0);
+  if (firstChar === '=' || firstChar === '+' || firstChar === '-' || firstChar === '@') {
+    return "'" + value;
+  }
+  return value;
+}
+
+/**
  * シートの全データを [{header: value, ...}] 形式で返す
  * @param {Sheet} sheet
  * @return {Array<{row: number, data: Object}>}
@@ -39,7 +53,7 @@ function sheetToObjects_(sheet) {
  */
 function appendRow_(sheet, headers, data) {
   var row = headers.map(function(h) {
-    return data[h] !== undefined ? data[h] : '';
+    return data[h] !== undefined ? sanitizeForSheet_(data[h]) : '';
   });
   sheet.appendRow(row);
 }
@@ -56,7 +70,7 @@ function updateRow_(sheet, rowNum, headers, data) {
   var currentObj = {};
   headers.forEach(function(h, idx) { currentObj[h] = existingRow[idx]; });
   Object.keys(data).forEach(function(k) { currentObj[k] = data[k]; });
-  var newRow = headers.map(function(h) { return currentObj[h] !== undefined ? currentObj[h] : ''; });
+  var newRow = headers.map(function(h) { return currentObj[h] !== undefined ? sanitizeForSheet_(currentObj[h]) : ''; });
   sheet.getRange(rowNum, 1, 1, headers.length).setValues([newRow]);
 }
 
@@ -95,6 +109,25 @@ var CompaniesModel = {
       }
     }
     return null;
+  },
+
+  findByNameAndEmail: function(name, email) {
+    var sheet = this.getSheet();
+    var rows = sheetToObjects_(sheet);
+    var qName = String(name).toLowerCase().trim();
+    var qEmail = String(email).toLowerCase().trim();
+    for (var i = 0; i < rows.length; i++) {
+      var sName = String(rows[i].company_name_normalized || rows[i].company_name_raw || '').toLowerCase().trim();
+      var sEmail = String(rows[i].contact_email || '').toLowerCase().trim();
+      if ((sName === qName || sName.indexOf(qName) !== -1) && sEmail === qEmail) {
+        return rows[i];
+      }
+    }
+    return null;
+  },
+
+  findByName: function(name) {
+    return this.findByNormalizedName(name);
   },
 
   findById: function(companyId) {

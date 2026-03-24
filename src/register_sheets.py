@@ -186,53 +186,112 @@ def _ensure_header(sheet: Any, headers: list[str], max_retries: int, base_delay:
         logger.info("ヘッダ行を書き込みました: %s", sheet.title)
 
 
-def find_existing_permit(
-    sheet: Any, company_id: str, permit_auth_normalized: str,
-    contractor_number: str, permit_category: str,
-    max_retries: int = 3, base_delay: float = 1.0,
-) -> int | None:
-    """4キー一致行の 1-based 行番号を返す。見つからなければ None。"""
-    all_values: list[list[str]] = call_with_retry(lambda: sheet.get_all_values(), max_retries, base_delay)
-    if len(all_values) < 2:
-        return None
+def build_permits_index(
+    ws_permits: Any, max_retries: int = 3, base_delay: float = 1.0,
+) -> tuple[dict[tuple[str, str, str, str], tuple[int, dict[str, str]]], list[str], int]:
+    """Permits シートを1回読み込み、upsert キー → (row_idx, row_dict) のインデックスを構築。
+
+    Returns:
+        (index, headers, next_row_idx)
+        - index: {(company_id, permit_authority_name_normalized, contractor_number, permit_category): (row_idx, row_dict)}
+        - headers: ヘッダ行のリスト
+        - next_row_idx: 次に append される行の 1-based 行番号
+    """
+    all_values: list[list[str]] = call_with_retry(lambda: ws_permits.get_all_values(), max_retries, base_delay)
+    if not all_values:
+        return {}, [], 2
     headers = all_values[0]
-    try:
-        i_cid = headers.index("company_id")
-        i_auth = headers.index("permit_authority_name_normalized")
-        i_num = headers.index("contractor_number")
-        i_cat = headers.index("permit_category")
-    except ValueError:
-        logger.error("Permits シートに必要なカラムがありません")
-        return None
-    for row_idx, row in enumerate(all_values[1:], start=2):
-        def g(i: int) -> str:
-            return row[i].strip() if i < len(row) else ""
-        if (g(i_cid) == company_id.strip() and g(i_auth) == permit_auth_normalized.strip()
-                and g(i_num) == contractor_number.strip() and g(i_cat) == permit_category.strip()):
-            return row_idx
-    return None
+    index: dict[tuple[str, str, str, str], tuple[int, dict[str, str]]] = {}
+    for i, row in enumerate(all_values[1:], start=2):
+        row_dict = dict(zip(headers, row))
+        key = (
+            row_dict.get("company_id", "").strip(),
+            row_dict.get("permit_authority_name_normalized", "").strip(),
+            row_dict.get("contractor_number", "").strip(),
+            row_dict.get("permit_category", "").strip(),
+        )
+        index[key] = (i, row_dict)
+    next_row_idx = len(all_values) + 1
+    return index, headers, next_row_idx
+
+
+def build_checklist_index(
+    ws_checklist: Any, max_retries: int = 3, base_delay: float = 1.0,
+) -> tuple[dict[tuple[str, str], tuple[int, dict[str, str]]], list[str], int]:
+    """DocumentChecklist シートを1回読み込み、(company_id, submission_date) → (row_idx, row_dict) のインデックスを構築。
+
+    Returns:
+        (index, headers, next_row_idx)
+    """
+    all_values: list[list[str]] = call_with_retry(lambda: ws_checklist.get_all_values(), max_retries, base_delay)
+    if not all_values:
+        return {}, [], 2
+    headers = all_values[0]
+    index: dict[tuple[str, str], tuple[int, dict[str, str]]] = {}
+    for i, row in enumerate(all_values[1:], start=2):
+        row_dict = dict(zip(headers, row))
+        key = (
+            row_dict.get("company_id", "").strip(),
+            row_dict.get("submission_date", "").strip(),
+        )
+        index[key] = (i, row_dict)
+    next_row_idx = len(all_values) + 1
+    return index, headers, next_row_idx
+
+
+def find_existing_permit(
+    permits_index: dict[tuple[str, str, str, str], tuple[int, dict[str, str]]],
+    company_id: str, permit_auth_normalized: str,
+    contractor_number: str, permit_category: str,
+) -> int | None:
+    """インメモリインデックスから4キー一致行の 1-based 行番号を返す。見つからなければ None。"""
+    key = (
+        company_id.strip(),
+        permit_auth_normalized.strip(),
+        contractor_number.strip(),
+        permit_category.strip(),
+    )
+    entry = permits_index.get(key)
+    return entry[0] if entry is not None else None
 
 
 def upsert_permit(
     sheet: Any, row_data: dict[str, Any], existing_row_idx: int | None,
+    permits_index: dict[tuple[str, str, str, str], tuple[int, dict[str, str]]],
+    next_row_idx_holder: list[int],
     max_retries: int = 3, base_delay: float = 1.0, dry_run: bool = False,
 ) -> str:
-    """INSERT or UPDATE。dry_run=True のときは実際の書き込みを行わない。"""
+    """INSERT or UPDATE。dry_run=True のときは実際の書き込みを行わない。
+
+    INSERT 後はインメモリインデックスへ新行を追加し、next_row_idx_holder[0] をインクリメントする。
+    UPDATE 後はインデックスの row_dict を更新する。
+    """
     now = _now_str()
+    upsert_key = (
+        str(row_data.get("company_id", "")).strip(),
+        str(row_data.get("permit_authority_name_normalized", "")).strip(),
+        str(row_data.get("contractor_number", "")).strip(),
+        str(row_data.get("permit_category", "")).strip(),
+    )
     if existing_row_idx is not None:
         if dry_run:
             logger.info("[DRY-RUN] UPDATE 行%d: %s", existing_row_idx, row_data.get("source_file"))
             return "UPDATE"
-        existing = call_with_retry(lambda: sheet.row_values(existing_row_idx), max_retries, base_delay)
-        h1 = call_with_retry(lambda: sheet.row_values(1), max_retries, base_delay)
-        try:
-            ver = int(existing[h1.index("permit_file_version")]) if "permit_file_version" in h1 else 0
-        except (ValueError, IndexError):
-            ver = 0
+        # 既存行の permit_file_version をインデックスから取得（API コール不要）
+        existing_entry = permits_index.get(upsert_key)
+        ver = 0
+        if existing_entry is not None:
+            try:
+                ver = int(existing_entry[1].get("permit_file_version", "0"))
+            except (ValueError, TypeError):
+                ver = 0
         row_data["permit_file_version"] = ver + 1
         row_data["updated_at"] = now
         new_row = [str(row_data.get(h, "")) for h in PERMITS_HEADERS]
         call_with_retry(lambda: sheet.update(f"A{existing_row_idx}", [new_row]), max_retries, base_delay)
+        # インデックス更新
+        new_row_dict = dict(zip(PERMITS_HEADERS, new_row))
+        permits_index[upsert_key] = (existing_row_idx, new_row_dict)
         return "UPDATE"
     else:
         if dry_run:
@@ -242,52 +301,52 @@ def upsert_permit(
         row_data.setdefault("permit_file_version", 1)
         row_data["created_at"] = now
         row_data["updated_at"] = now
-        call_with_retry(lambda: sheet.append_row([str(row_data.get(h, "")) for h in PERMITS_HEADERS]),
-                        max_retries, base_delay)
+        new_row = [str(row_data.get(h, "")) for h in PERMITS_HEADERS]
+        call_with_retry(lambda: sheet.append_row(new_row), max_retries, base_delay)
+        # インデックスへ新行を追加
+        new_row_dict = dict(zip(PERMITS_HEADERS, new_row))
+        inserted_row_idx = next_row_idx_holder[0]
+        permits_index[upsert_key] = (inserted_row_idx, new_row_dict)
+        next_row_idx_holder[0] += 1
         return "INSERT"
 
 
 def register_document_checklist(
     checklist_sheet: Any, row_data: dict[str, Any],
+    checklist_index: dict[tuple[str, str], tuple[int, dict[str, str]]],
+    checklist_headers: list[str],
+    next_checklist_row_holder: list[int],
     max_retries: int = 3, base_delay: float = 1.0, dry_run: bool = False,
 ) -> None:
-    """document_type フィールドがある行のみ DocumentChecklist を upsert する。"""
+    """document_type フィールドがある行のみ DocumentChecklist を upsert する。
+
+    インメモリインデックスを使って既存行を検索し、INSERT 後はインデックスへ追加する。
+    """
     doc_type = str(row_data.get("document_type", "")).strip()
     if _is_blank(doc_type):
         return
-    company_id = row_data.get("company_id", "")
-    submission_date = row_data.get("last_received_date", "")
+    company_id = str(row_data.get("company_id", "")).strip()
+    submission_date = str(row_data.get("last_received_date", "")).strip()
     if dry_run:
         logger.info("[DRY-RUN] DocumentChecklist upsert: company_id=%s type=%s", company_id, doc_type)
         return
 
-    all_values: list[list[str]] = call_with_retry(lambda: checklist_sheet.get_all_values(), max_retries, base_delay)
     now = _now_str()
-    target_row_idx: int | None = None
+    checklist_key = (company_id, submission_date)
+    entry = checklist_index.get(checklist_key)
 
-    if len(all_values) >= 2:
-        headers = all_values[0]
-        try:
-            cid_i, date_i = headers.index("company_id"), headers.index("submission_date")
-        except ValueError:
-            logger.warning("DocumentChecklist のヘッダ構造が異なります")
-            return
-        for row_idx, row in enumerate(all_values[1:], start=2):
-            if (row[cid_i].strip() if cid_i < len(row) else "") == str(company_id).strip() \
-                    and (row[date_i].strip() if date_i < len(row) else "") == str(submission_date).strip():
-                target_row_idx = row_idx
-                break
-
-    if target_row_idx is not None:
-        headers = all_values[0]
-        try:
-            doc_i = headers.index(doc_type)
-            upd_i = headers.index("updated_at")
-        except ValueError:
+    if entry is not None:
+        target_row_idx, existing_row_dict = entry
+        if doc_type not in checklist_headers:
             logger.warning("DocumentChecklist に列 '%s' が見つかりません", doc_type)
             return
+        doc_i = checklist_headers.index(doc_type)
+        upd_i = checklist_headers.index("updated_at")
         call_with_retry(lambda: checklist_sheet.update_cell(target_row_idx, doc_i + 1, "TRUE"), max_retries, base_delay)
         call_with_retry(lambda: checklist_sheet.update_cell(target_row_idx, upd_i + 1, now), max_retries, base_delay)
+        # インデックス更新
+        existing_row_dict[doc_type] = "TRUE"
+        existing_row_dict["updated_at"] = now
     else:
         new_row_data = {h: "" for h in DOCUMENT_CHECKLIST_HEADERS}
         new_row_data.update({"check_id": str(uuid.uuid4()), "company_id": company_id,
@@ -296,8 +355,13 @@ def register_document_checklist(
                              "created_at": now, "updated_at": now})
         if doc_type in DOCUMENT_CHECKLIST_HEADERS:
             new_row_data[doc_type] = "TRUE"
-        call_with_retry(lambda: checklist_sheet.append_row([str(new_row_data.get(h, "")) for h in DOCUMENT_CHECKLIST_HEADERS]),
-                        max_retries, base_delay)
+        new_row = [str(new_row_data.get(h, "")) for h in DOCUMENT_CHECKLIST_HEADERS]
+        call_with_retry(lambda: checklist_sheet.append_row(new_row), max_retries, base_delay)
+        # インデックスへ新行を追加
+        new_row_dict = dict(zip(DOCUMENT_CHECKLIST_HEADERS, new_row))
+        inserted_idx = next_checklist_row_holder[0]
+        checklist_index[checklist_key] = (inserted_idx, new_row_dict)
+        next_checklist_row_holder[0] += 1
 
     logger.info("DocumentChecklist 更新: company_id=%s type=%s", company_id, doc_type)
 
@@ -305,7 +369,7 @@ def register_document_checklist(
 def main(csv_path: Path | None = None, dry_run: bool = False) -> None:
     config = load_config()
     sheets_id: str = config.get("GOOGLE_SHEETS_ID", "")
-    credentials_file: str = config.get("GOOGLE_CREDENTIALS_FILE", "")
+    credentials_file: str = config.get("GOOGLE_SERVICE_ACCOUNT_FILE", "")
     max_retries: int = int(config.get("RETRY_MAX", 3))
     base_delay: float = float(config.get("RETRY_BASE_DELAY_SEC", 1.0))
     staging_dir = Path(config.get("DATA_ROOT", str(PROJECT_ROOT))) / config.get("STAGING_CSV_DIR", "output")
@@ -344,6 +408,22 @@ def main(csv_path: Path | None = None, dry_run: bool = False) -> None:
 
     registered = updated = errors = 0
 
+    # ── インメモリインデックスを1回だけ構築 (O(N) API calls → O(1)) ──
+    permits_index: dict[tuple[str, str, str, str], tuple[int, dict[str, str]]] = {}
+    permits_next_row: list[int] = [2]  # mutable holder for next row idx
+    checklist_index: dict[tuple[str, str], tuple[int, dict[str, str]]] = {}
+    checklist_headers: list[str] = []
+    checklist_next_row: list[int] = [2]
+
+    if not dry_run and permits_sheet is not None:
+        permits_index, _p_headers, p_next = build_permits_index(permits_sheet, max_retries, base_delay)
+        permits_next_row[0] = p_next
+        logger.info("Permits インデックス構築完了: %d 件", len(permits_index))
+    if not dry_run and checklist_sheet is not None:
+        checklist_index, checklist_headers, c_next = build_checklist_index(checklist_sheet, max_retries, base_delay)
+        checklist_next_row[0] = c_next
+        logger.info("DocumentChecklist インデックス構築完了: %d 件", len(checklist_index))
+
     for row in rows:
         source = row.get("source_file", "?")
         try:
@@ -354,8 +434,12 @@ def main(csv_path: Path | None = None, dry_run: bool = False) -> None:
             cat = str(row.get("permit_category", "")).strip()
 
             existing_idx = None if dry_run else find_existing_permit(
-                permits_sheet, cid, auth, num, cat, max_retries, base_delay)
-            action = upsert_permit(permits_sheet, row, existing_idx, max_retries, base_delay, dry_run)
+                permits_index, cid, auth, num, cat)
+            action = upsert_permit(
+                permits_sheet, row, existing_idx,
+                permits_index, permits_next_row,
+                max_retries, base_delay, dry_run,
+            )
 
             if action == "INSERT":
                 registered += 1
@@ -366,7 +450,9 @@ def main(csv_path: Path | None = None, dry_run: bool = False) -> None:
 
             register_document_checklist(
                 checklist_sheet if not dry_run else None,
-                row, max_retries, base_delay, dry_run,
+                row,
+                checklist_index, checklist_headers, checklist_next_row,
+                max_retries, base_delay, dry_run,
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("エラー (source=%s): %s", source, exc)
