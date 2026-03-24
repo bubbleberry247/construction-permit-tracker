@@ -85,26 +85,20 @@ function onFormSubmit(e) {
     // 4. Submissions に詳細を更新（パース成功フラグ）
     // （最終的に OK/NG で上書きする）
 
-    // 5. Company を検索・なければ作成
-    var company = CompaniesModel.findByNameAndEmail(companyNameRaw, contactEmail);
+    // 5. Company を検索・なければ作成（正規化済み名で照合）
+    var normalizedName = companyNameRaw
+      .replace(/（株）|㈱|株式会社|（有）|㈲|有限会社/g, '')
+      .replace(/\s+/g, '')
+      .trim();
+    var company = CompaniesModel.findByNormalizedName(normalizedName);
     if (!company) {
-      // Check if same name exists with different email (possible different company with same name)
-      var sameNameCompany = CompaniesModel.findByName(companyNameRaw);
-      if (sameNameCompany) {
-        sendErrorAlert(
-          '同名会社の新規登録',
-          '会社名「' + companyNameRaw + '」は既に登録されていますが、メールアドレスが異なります。\n' +
-          '既存: ' + (sameNameCompany.contact_email || '未設定') + '\n' +
-          '今回: ' + contactEmail + '\n' +
-          '新規会社として登録しました。重複の場合は手動統合が必要です。'
-        );
-      }
       company = CompaniesModel.create({
-        company_name:        companyNameRaw,
-        contact_person:      contactPerson,
-        contact_email:       contactEmail,
-        contact_email_cc:    '',
-        status:              '稼働中'
+        company_name_raw:        companyNameRaw,
+        company_name_normalized: normalizedName,
+        contact_person:          contactPerson,
+        contact_email:           contactEmail,
+        contact_email_cc:        '',
+        status:                  'ACTIVE'
       });
     }
     var companyId = company.company_id;
@@ -119,18 +113,17 @@ function onFormSubmit(e) {
       permitId = existingPermit.permit_id;
       permitVersion = (Number(existingPermit.permit_file_version) || 1) + 1;
 
-      // 旧URLをnoteに保存
+      // 旧Drive URLをnoteに保存
       var oldNote = existingPermit.note || '';
-      var oldUrl = existingPermit.permit_file_url || '';
+      var oldUrl = existingPermit.permit_file_share_url || '';
       var newNote = oldNote;
       if (oldUrl) {
         newNote = (oldNote ? oldNote + '\n' : '') + '旧: ' + oldUrl;
       }
 
       PermitsModel.update(permitId, {
-        contact_person:            contactPerson,
-        governor_or_minister:      governorOrMin,
-        general_or_specific:       generalOrSpec,
+        permit_authority_type:     governorOrMin,
+        permit_category:           generalOrSpec,
         trade_categories:          tradeCategories,
         issue_date:                issueDate || issueDateRaw,
         expiry_date:               expiryDate,
@@ -143,14 +136,15 @@ function onFormSubmit(e) {
       permitVersion = 1;
       var newPermit = PermitsModel.create({
         company_id:                companyId,
-        permit_number:             permitNumberRaw,
-        governor_or_minister:      governorOrMin,
-        general_or_specific:       generalOrSpec,
+        company_name_raw:          companyNameRaw,
+        permit_number_full:        permitNumberRaw,
+        permit_authority_type:     governorOrMin,
+        permit_category:           generalOrSpec,
         trade_categories:          tradeCategories,
         issue_date:                issueDate || issueDateRaw,
         expiry_date:               expiryDate,
         renewal_deadline_date:     '',
-        status:                    'VALID',
+        current_status:            'VALID',
         last_received_date:        submittedAt,
         evidence_renewal_application: false,
         note:                      noteRaw,
@@ -161,7 +155,6 @@ function onFormSubmit(e) {
 
     // 7. PDFファイルを Drive に移動・リネーム
     var permitFileUrl = '';
-    var permitFileDriveId = '';
 
     if (permitFileId) {
       try {
@@ -188,7 +181,6 @@ function onFormSubmit(e) {
         permitFile.moveTo(companyFolder);
 
         permitFileUrl = permitFile.getUrl();
-        permitFileDriveId = permitFile.getId();
       } catch (fileErr) {
         logError('PDFファイル移動エラー', fileErr);
         // ファイル操作失敗でも処理継続（URLは空のまま）
@@ -203,18 +195,17 @@ function onFormSubmit(e) {
         evidenceFileUrl = evidenceFile.getUrl();
         PermitsModel.update(permitId, {
           evidence_renewal_application: true,
-          evidence_file_url:            evidenceFileUrl
+          evidence_file_path:           evidenceFileUrl  // Drive URL（VPNパス不使用のGASコンテキスト）
         });
       } catch (evErr) {
         logError('受付票ファイル取得エラー', evErr);
       }
     }
 
-    // 8. Permits に permit_file_url / permit_file_drive_id 更新
-    if (permitFileUrl || permitFileDriveId) {
+    // 8. Permits に permit_file_share_url 更新（Drive URL）
+    if (permitFileUrl) {
       PermitsModel.update(permitId, {
-        permit_file_url:      permitFileUrl,
-        permit_file_drive_id: permitFileDriveId
+        permit_file_share_url: permitFileUrl
       });
     }
 

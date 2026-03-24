@@ -157,14 +157,14 @@ var PermitsModel = {
     return sheet;
   },
 
-  findByCompanyAndNumber: function(companyId, permitNumber) {
+  findByCompanyAndNumber: function(companyId, permitNumberFull) {
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
-    var normNumber = String(permitNumber).trim();
+    var normNumber = String(permitNumberFull).trim();
     for (var i = 0; i < rows.length; i++) {
       if (
         String(rows[i].company_id) === String(companyId) &&
-        String(rows[i].permit_number).trim() === normNumber
+        String(rows[i].permit_number_full).trim() === normNumber
       ) {
         return rows[i];
       }
