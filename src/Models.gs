@@ -78,19 +78,19 @@ var CompaniesModel = {
   },
 
   /**
-   * 正規化済み会社名（またはraw名）で会社を検索する
-   * 完全一致を優先し、部分一致（substring）もフォールバックとして許容する。
-   * 部分一致は意図的な仕様: 入力が「〇〇建設」で登録名が「株式会社〇〇建設」のケースを救済するため。
+   * 正規化済み会社名で会社を検索する（完全一致のみ）。
+   * 空文字の場合は null を返す（空クエリで全件ヒットするバグを防止）。
    * @param {string} normalizedName  検索する会社名（正規化済み）
    * @return {Object|null}
    */
   findByNormalizedName: function(normalizedName) {
+    if (!normalizedName || String(normalizedName).trim() === '') return null;
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
-    var queryName = String(normalizedName).toLowerCase();
+    var queryName = String(normalizedName).trim().toLowerCase();
     for (var i = 0; i < rows.length; i++) {
-      var stored = String(rows[i].company_name_normalized || rows[i].company_name_raw || '').toLowerCase();
-      if (stored === queryName || stored.indexOf(queryName) !== -1) {
+      var stored = String(rows[i].company_name_normalized || rows[i].company_name_raw || '').trim().toLowerCase();
+      if (stored === queryName) {
         return rows[i];
       }
     }

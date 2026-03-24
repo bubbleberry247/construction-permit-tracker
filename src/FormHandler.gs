@@ -85,11 +85,15 @@ function onFormSubmit(e) {
     // 4. Submissions に詳細を更新（パース成功フラグ）
     // （最終的に OK/NG で上書きする）
 
-    // 5. Company を検索・なければ作成（正規化済み名で照合）
+    // 5. Company を検索・なければ作成（完全一致のみ）
     var normalizedName = companyNameRaw
       .replace(/（株）|㈱|株式会社|（有）|㈲|有限会社/g, '')
       .replace(/\s+/g, '')
       .trim();
+    if (!normalizedName) {
+      // 正規化後に空になる場合は会社名不明 → エラー
+      throw new Error('会社名の正規化結果が空です: "' + companyNameRaw + '"');
+    }
     var company = CompaniesModel.findByNormalizedName(normalizedName);
     if (!company) {
       company = CompaniesModel.create({
