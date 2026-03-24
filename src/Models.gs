@@ -75,15 +75,19 @@ function updateRow_(sheet, rowNum, headers, data) {
 }
 
 // ─────────────────────────────────────────────────
-// 会社名の検索用正規化（会社種別除去 + 空白除去 + 小文字化）
-// Python側の company_name_normalized は「株式会社ABC建設」形式。
-// GASフォーム入力は「ABC建設」のように省略されうる。
-// 両側でこのヘルパーを通すことで形式の差異を吸収する。
+// 会社名の検索用正規化（Python側 normalize_company_name と統一）
+// 法人格は除去しない。略記→正式表記に変換する。
+//   ㈱ → 株式会社、（株） → 株式会社
+//   ㈲ → 有限会社、（有） → 有限会社
+// これにより「株式会社A」と「有限会社A」は別会社として識別される。
 // ─────────────────────────────────────────────────
-function stripCompanyType_(name) {
+function normalizeCompanyName_(name) {
   if (!name) return '';
   return String(name)
-    .replace(/株式会社|有限会社|合同会社|合資会社|合名会社|（株）|㈱|（有）|㈲/g, '')
+    .replace(/㈱/g, '株式会社')
+    .replace(/㈲/g, '有限会社')
+    .replace(/（株）/g, '株式会社')
+    .replace(/（有）/g, '有限会社')
     .replace(/\s+/g, '')
     .trim()
     .toLowerCase();
@@ -114,13 +118,13 @@ var CompaniesModel = {
    */
   findByNormalizedName: function(normalizedName) {
     if (!normalizedName || String(normalizedName).trim() === '') return null;
-    var queryStripped = stripCompanyType_(normalizedName);
+    var queryStripped = normalizeCompanyName_(normalizedName);
     if (!queryStripped) return null;
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
     for (var i = 0; i < rows.length; i++) {
       var storedName = rows[i].company_name_normalized || rows[i].company_name_raw || '';
-      var storedStripped = stripCompanyType_(storedName);
+      var storedStripped = normalizeCompanyName_(storedName);
       if (storedStripped && storedStripped === queryStripped) {
         return rows[i];
       }

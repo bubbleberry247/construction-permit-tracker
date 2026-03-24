@@ -93,8 +93,8 @@ function onFormSubmit(e) {
     // （最終的に OK/NG で上書きする）
 
     // 5. Company を検索・なければ作成（完全一致のみ）
-    // stripCompanyType_ で Python 側と同じ正規化（株式会社等除去 + 空白除去 + 小文字化）
-    var normalizedName = stripCompanyType_(companyNameRaw);
+    // normalizeCompanyName_ で Python 側と同じ正規化（株式会社等除去 + 空白除去 + 小文字化）
+    var normalizedName = normalizeCompanyName_(companyNameRaw);
     if (!normalizedName) {
       // 正規化後に空になる場合は会社名不明 → エラー
       throw new Error('会社名の正規化結果が空です: "' + companyNameRaw + '"');
