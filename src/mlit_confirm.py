@@ -4,6 +4,8 @@ mlit_confirm.py — MLIT etsuran2 で許可証の現在状態を確認し、ス�
 Usage:
     python src/mlit_confirm.py                    # Google Sheets からアクティブ permit を取得して全件確認
     python src/mlit_confirm.py --csv path/to.csv  # 特定の staging CSV から対象を取得
+    python src/mlit_confirm.py --master           # company_master.csv から確認対象を取得
+    python src/mlit_confirm.py --master --all     # CONFIRMED 含め全件を確認対象にする
     python src/mlit_confirm.py --dry-run          # URL生成のみ（Playwright非実行）
 
 確認対象ステータス: EXPIRING / RENEWAL_OVERDUE / EXPIRED / RENEWAL_IN_PROGRESS
@@ -173,6 +175,48 @@ def fetch_permits_from_csv(csv_path: Path) -> list[dict[str, Any]]:
     return permits
 
 
+def fetch_permits_from_master(
+    master_csv_path: Path,
+    include_all: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    company_master.csv から確認対象を取得する。
+
+    B案: permit_number があり status=ACTIVE の会社が対象。
+    include_all=True の場合は mlit_status に関わらず全件。
+    デフォルトは mlit_status != CONFIRMED のもののみ。
+    """
+    if not master_csv_path.exists():
+        logger.warning("company_master.csv が見つかりません: %s", master_csv_path)
+        return []
+
+    permits: list[dict[str, Any]] = []
+    total = 0
+    with master_csv_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            total += 1
+            if row.get("status", "").strip() != "ACTIVE":
+                continue
+            permit_number = row.get("permit_number", "").strip()
+            if not permit_number:
+                continue
+            if not include_all and row.get("mlit_status", "").strip() == "CONFIRMED":
+                continue
+
+            # Map to the format expected by confirm_permit_with_playwright
+            permits.append({
+                "company_id": row.get("company_id", "").strip(),
+                "company_name": row.get("official_name", "").strip(),
+                "permit_authority_name_normalized": row.get("permit_authority", "").strip(),
+                "contractor_number": permit_number,
+                "permit_number_full": "",  # Not available in master
+                "permit_id": "",  # Not a Sheets record
+            })
+
+    logger.info("company_master.csv から取得: 合計 %d 行 → 確認対象 %d 件", total, len(permits))
+    return permits
+
+
 # ---------------------------------------------------------------------------
 # URL 生成・許可区分判定
 # ---------------------------------------------------------------------------
@@ -208,6 +252,53 @@ def get_screenshot_path(data_root: Path, contractor_number: str) -> Path:
     screenshots_dir = data_root / "data" / "mlit_screenshots"
     screenshots_dir.mkdir(parents=True, exist_ok=True)
     return screenshots_dir / f"{date_str}_{safe_number}.png"
+
+
+def append_confirmation_log(
+    log_path: Path,
+    company_id: str,
+    confirmer: str,
+    method: str,
+    result: str,
+    permit_authority: str,
+    contractor_number: str,
+    screenshot_path: str,
+    note: str = "",
+) -> None:
+    """mlit_confirmation_log.csv に1件追記する。"""
+    import uuid
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    headers = [
+        "confirmation_id", "company_id", "confirmed_at", "confirmer",
+        "method", "result", "permit_authority", "contractor_number",
+        "screenshot_path", "note",
+    ]
+
+    # Map Japanese result to enum
+    result_map = {"一致": "MATCH", "不一致": "NO_MATCH", "確認不可": "ERROR"}
+    result_enum = result_map.get(result, "ERROR")
+
+    record = {
+        "confirmation_id": str(uuid.uuid4()),
+        "company_id": company_id,
+        "confirmed_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "confirmer": confirmer,
+        "method": method,
+        "result": result_enum,
+        "permit_authority": permit_authority,
+        "contractor_number": contractor_number,
+        "screenshot_path": screenshot_path,
+        "note": note,
+    }
+
+    write_header = not log_path.exists() or log_path.stat().st_size == 0
+    with log_path.open("a", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
+        if write_header:
+            writer.writeheader()
+        writer.writerow(record)
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +592,12 @@ def update_permit_mlit_result(
 # メイン処理
 # ---------------------------------------------------------------------------
 
-def main(csv_path: Path | None, dry_run: bool) -> None:
+def main(
+    csv_path: Path | None,
+    dry_run: bool,
+    master_mode: bool = False,
+    include_all: bool = False,
+) -> None:
     config = load_config()
     data_root = Path(config.get("DATA_ROOT", str(PROJECT_ROOT)))
     sheets_id: str = config.get("GOOGLE_SHEETS_ID", "")
@@ -514,6 +610,9 @@ def main(csv_path: Path | None, dry_run: bool) -> None:
 
     if csv_path is not None:
         permits = fetch_permits_from_csv(csv_path)
+    elif master_mode:
+        master_csv = data_root / "output" / "company_master.csv"
+        permits = fetch_permits_from_master(master_csv, include_all=include_all)
     elif sheets_id:
         client = get_sheets_client(credentials_file)
         if client is None:
@@ -592,6 +691,20 @@ def main(csv_path: Path | None, dry_run: bool) -> None:
             screenshot_path,
         )
 
+        # Write to mlit_confirmation_log.csv
+        company_id = permit.get("company_id", "")
+        confirmation_log_path = data_root / "logs" / "mlit_confirmation_log.csv"
+        append_confirmation_log(
+            log_path=confirmation_log_path,
+            company_id=company_id,
+            confirmer="system",
+            method="MLIT_SEARCH",
+            result=confirm_result,
+            permit_authority=authority_normalized,
+            contractor_number=contractor_number,
+            screenshot_path=str(screenshot_path),
+        )
+
         # Sheets 書き戻し用に結果を収集（O(1) ルックアップ）
         if permit_row_index is not None and col_indices is not None and permit_id:
             row_idx = permit_row_index.get(permit_id)
@@ -627,6 +740,8 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="MLIT etsuran2 で許可証の現在状態を確認する")
     p.add_argument("--csv", dest="csv_path", default=None, help="staging CSV ファイルパス（省略時は Sheets から取得）")
     p.add_argument("--dry-run", action="store_true", help="URL 生成のみ（Playwright 非実行）")
+    p.add_argument("--master", action="store_true", help="company_master.csv から確認対象を取得")
+    p.add_argument("--all", dest="include_all", action="store_true", help="CONFIRMED 含め全件を確認対象にする")
     return p.parse_args()
 
 
@@ -635,4 +750,6 @@ if __name__ == "__main__":
     main(
         csv_path=Path(args.csv_path) if args.csv_path else None,
         dry_run=args.dry_run,
+        master_mode=args.master,
+        include_all=args.include_all,
     )

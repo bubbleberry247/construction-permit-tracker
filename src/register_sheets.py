@@ -101,6 +101,48 @@ def _is_blank(value: Any) -> bool:
     return value is None or str(value).strip().lower() in ("", "nan", "none", "null")
 
 
+def _resolve_company_by_email(
+    source_file: str,
+    inbound_log_path: Path,
+    email_map_path: Path,
+) -> str:
+    """
+    source_file -> inbound_log -> original_sender_email -> email_company_map -> company_id.
+    Returns company_id or empty string.
+    Only returns a match if confidence=HIGH and unique.
+    """
+    if not inbound_log_path.exists() or not email_map_path.exists():
+        return ""
+
+    # Step 1: Find original_sender_email from inbound_log
+    sender_email = ""
+    with inbound_log_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            saved_path = row.get("saved_path", "")
+            if saved_path and Path(saved_path).name == source_file:
+                sender_email = row.get("original_sender_email", "").strip()
+                break
+
+    if not sender_email:
+        return ""
+
+    # Step 2: Look up in email_company_map
+    email_lower = sender_email.lower()
+    matches: list[str] = []
+    with email_map_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            csv_email = row.get("sender_email", "").lower().strip()
+            confidence = row.get("confidence", "").strip()
+            cid = row.get("company_id", "").strip()
+            if csv_email == email_lower and confidence == "HIGH" and cid:
+                matches.append(cid)
+
+    # Only return if unique HIGH match
+    if len(matches) == 1:
+        return matches[0]
+    return ""
+
+
 def _to_date(value: Any) -> date | None:
     if _is_blank(value):
         return None
@@ -115,8 +157,12 @@ def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def read_staging_csv(csv_path: Path) -> list[dict[str, Any]]:
-    """parse_status=OK かつ company_id が非空の行のみ返す。それ以外はログしてスキップ。"""
+def read_staging_csv(csv_path: Path, data_root: Path | None = None) -> list[dict[str, Any]]:
+    """parse_status=OK かつ company_id が非空の行のみ返す。それ以外はログしてスキップ。
+
+    company_id が空の場合、data_root が指定されていれば email_company_map.csv による
+    メールアドレスベースの解決を試みる。
+    """
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV が見つかりません: {csv_path}")
     valid: list[dict[str, Any]] = []
@@ -129,8 +175,20 @@ def read_staging_csv(csv_path: Path) -> list[dict[str, Any]]:
                 logger.info("SKIP (parse_status=%s): %s", row.get("parse_status"), src)
                 continue
             if _is_blank(row.get("company_id")):
-                logger.warning("BLOCKED: TIER3_UNKNOWN_COMPANY - company_id not set: %s", src)
-                continue
+                # Try email-based resolution before blocking
+                resolved_id = ""
+                if data_root is not None:
+                    resolved_id = _resolve_company_by_email(
+                        src,
+                        data_root / "logs" / "inbound_log.csv",
+                        data_root / "output" / "email_company_map.csv",
+                    )
+                if resolved_id:
+                    row["company_id"] = resolved_id
+                    logger.info("RESOLVED via email: %s → company_id=%s", src, resolved_id)
+                else:
+                    logger.warning("BLOCKED: TIER3_UNKNOWN_COMPANY - company_id not set: %s", src)
+                    continue
             valid.append(dict(row))
     logger.info("CSV読み込み: 合計 %d 行 → 有効 %d 行", total, len(valid))
     return valid
@@ -372,7 +430,8 @@ def main(csv_path: Path | None = None, dry_run: bool = False) -> None:
     credentials_file: str = config.get("GOOGLE_SERVICE_ACCOUNT_FILE", "")
     max_retries: int = int(config.get("RETRY_MAX", 3))
     base_delay: float = float(config.get("RETRY_BASE_DELAY_SEC", 1.0))
-    staging_dir = Path(config.get("DATA_ROOT", str(PROJECT_ROOT))) / config.get("STAGING_CSV_DIR", "output")
+    data_root = Path(config.get("DATA_ROOT", str(PROJECT_ROOT)))
+    staging_dir = data_root / config.get("STAGING_CSV_DIR", "output")
 
     if csv_path is None:
         csv_path = find_latest_staging_csv(staging_dir)
@@ -382,7 +441,7 @@ def main(csv_path: Path | None = None, dry_run: bool = False) -> None:
         logger.info("GOOGLE_SHEETS_ID が未設定のため dry-run モードで動作します")
         dry_run = True
 
-    rows = read_staging_csv(csv_path)
+    rows = read_staging_csv(csv_path, data_root=data_root)
     if not rows:
         logger.warning("登録対象行が 0 件です。終了します。")
         _print_summary(0, 0, 0, 0, 0)

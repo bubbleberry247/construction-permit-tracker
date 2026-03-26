@@ -371,6 +371,84 @@ def match_company(
     return "", "not_found"
 
 
+def match_company_by_master(
+    company_name_normalized: str,
+    master_csv_path: Path,
+) -> tuple[str, str]:
+    """
+    新会社マスタ (company_master.csv) と照合。
+    official_name の完全一致 → name_aliases の部分一致でフォールバック。
+    Returns: (company_id, match_type: "exact" | "alias" | "not_found")
+    """
+    if not master_csv_path.exists():
+        return "", "not_found"
+
+    exact_matches: list[str] = []
+    alias_matches: list[str] = []
+
+    # Normalize for comparison
+    target = unicodedata.normalize("NFKC", company_name_normalized).replace("\u3000", " ").strip()
+    target_nospace = target.replace(" ", "")
+
+    with master_csv_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            cid = row.get("company_id", "").strip()
+            official = row.get("official_name", "").strip()
+            aliases_raw = row.get("name_aliases", "")
+
+            # Exact match on official_name
+            off_norm = unicodedata.normalize("NFKC", official).replace("\u3000", " ").strip()
+            if off_norm == target or off_norm.replace(" ", "") == target_nospace:
+                exact_matches.append(cid)
+                continue
+
+            # Alias match
+            if aliases_raw:
+                for alias in aliases_raw.split("|"):
+                    alias_norm = unicodedata.normalize("NFKC", alias.strip()).replace("\u3000", " ").strip()
+                    if alias_norm == target or alias_norm.replace(" ", "") == target_nospace:
+                        alias_matches.append(cid)
+                        break
+
+    if len(exact_matches) == 1:
+        return exact_matches[0], "exact"
+    if len(exact_matches) > 1:
+        return exact_matches[0], "exact"
+    if len(alias_matches) == 1:
+        return alias_matches[0], "alias"
+    if len(alias_matches) > 1:
+        return alias_matches[0], "alias"
+    return "", "not_found"
+
+
+def match_company_by_email(
+    sender_email: str,
+    email_map_csv_path: Path,
+) -> tuple[str, str]:
+    """
+    sender_email → company_id の逆引き (email_company_map.csv)。
+    confidence=HIGH かつ一意マッチのみ自動採用。
+    Returns: (company_id, match_type: "email_exact" | "not_found")
+    """
+    if not sender_email or not email_map_csv_path.exists():
+        return "", "not_found"
+
+    email_lower = sender_email.lower().strip()
+    matches: list[str] = []
+
+    with email_map_csv_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            csv_email = row.get("sender_email", "").lower().strip()
+            confidence = row.get("confidence", "").strip()
+            cid = row.get("company_id", "").strip()
+            if csv_email == email_lower and confidence == "HIGH" and cid:
+                matches.append(cid)
+
+    if len(matches) == 1:
+        return matches[0], "email_exact"
+    return "", "not_found"
+
+
 # ---------------------------------------------------------------------------
 # Permit authority name normalization
 # ---------------------------------------------------------------------------
@@ -762,17 +840,65 @@ def _normalize_trades_and_dates(
 
 
 # ---------------------------------------------------------------------------
-# 7f. Company match and determine parse_status
+# 7f. Sender email lookup from inbound_log
+# ---------------------------------------------------------------------------
+def _build_sender_email_lookup(data_root: Path) -> dict[str, str]:
+    """inbound_log.csv から source_file → original_sender_email のマッピングを構築。"""
+    log_path = data_root / "logs" / "inbound_log.csv"
+    lookup: dict[str, str] = {}
+    if not log_path.exists():
+        return lookup
+    with log_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            saved_path = row.get("saved_path", "")
+            email = row.get("original_sender_email", "").strip()
+            if saved_path and email:
+                # Extract just the filename from saved_path
+                filename = Path(saved_path).name
+                lookup[filename] = email
+    return lookup
+
+
+# ---------------------------------------------------------------------------
+# 7g. Company match and determine parse_status
 # ---------------------------------------------------------------------------
 def _resolve_company_and_status(
-    result: dict[str, Any], data_root: Path, warnings: list[str]
+    result: dict[str, Any], data_root: Path, warnings: list[str],
+    sender_email: str = "",
 ) -> None:
-    """会社マッチングと最終ステータス確定（副作用のみ）。"""
-    csv_candidates = sorted(
-        (data_root / "output").glob("companies_import_*.csv"), reverse=True
-    )
-    companies_csv = csv_candidates[0] if csv_candidates else data_root / "output" / "companies_import_latest.csv"
-    company_id, match_type = match_company(result["company_name_normalized"], companies_csv)
+    """会社マッチングと最終ステータス確定（副作用のみ）。
+
+    解決順序:
+    1. company_master.csv の official_name 完全一致
+    2. company_master.csv の name_aliases 一致
+    3. email_company_map.csv の sender_email 逆引き (HIGH+一意のみ)
+    4. 旧 companies_import_*.csv フォールバック
+    5. 全失敗 → TIER3_UNKNOWN_COMPANY
+    """
+    master_csv = data_root / "output" / "company_master.csv"
+    email_map_csv = data_root / "output" / "email_company_map.csv"
+
+    company_id = ""
+    match_type = "not_found"
+
+    # Step 1 & 2: New company master (official_name + aliases)
+    if master_csv.exists():
+        company_id, match_type = match_company_by_master(
+            result["company_name_normalized"], master_csv
+        )
+
+    # Step 3: Email-based matching
+    if match_type == "not_found" and sender_email:
+        company_id, match_type = match_company_by_email(sender_email, email_map_csv)
+
+    # Step 4: Legacy fallback (companies_import_*.csv)
+    if match_type == "not_found":
+        csv_candidates = sorted(
+            (data_root / "output").glob("companies_import_*.csv"), reverse=True
+        )
+        companies_csv = csv_candidates[0] if csv_candidates else data_root / "output" / "companies_import_latest.csv"
+        company_id, match_type = match_company(result["company_name_normalized"], companies_csv)
+
     result["company_id"] = company_id
 
     if match_type == "not_found":
@@ -800,6 +926,7 @@ def process_pdf(
     pdf_path: Path,
     config: dict[str, Any],
     known_hashes: set[str],
+    sender_email: str = "",
 ) -> dict[str, Any]:
     """1つのPDFを処理してステージングレコード辞書を返す。エラー時も必ず辞書を返す。"""
     data_root = Path(config["DATA_ROOT"])
@@ -843,7 +970,7 @@ def process_pdf(
 
     warnings = _normalize_trades_and_dates(extracted, result)
     warnings = validation_warnings + warnings
-    _resolve_company_and_status(result, data_root, warnings)
+    _resolve_company_and_status(result, data_root, warnings, sender_email=sender_email)
     return result
 
 
@@ -902,12 +1029,14 @@ def write_staging_csv(records: list[dict[str, Any]], output_dir: Path) -> Path:
 # 8. main helpers
 # ---------------------------------------------------------------------------
 def _process_one(
-    pdf_path: Path, config: dict[str, Any], known_hashes: set[str], data_root: Path
+    pdf_path: Path, config: dict[str, Any], known_hashes: set[str], data_root: Path,
+    sender_lookup: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """1 ファイルを処理して result を返す。移動まで担当。"""
     logger.info("処理開始: %s", pdf_path.name)
+    sender_email = (sender_lookup or {}).get(pdf_path.name, "")
     try:
-        record = process_pdf(pdf_path, config, known_hashes)
+        record = process_pdf(pdf_path, config, known_hashes, sender_email=sender_email)
     except Exception as exc:
         logger.error("予期しないエラー [%s]: %s", pdf_path.name, exc)
         record = {col: "" for col in STAGING_CSV_COLUMNS}
@@ -957,7 +1086,8 @@ def main() -> None:
 
     logger.info("処理対象: %d 件", len(pdf_files))
     known_hashes: set[str] = set()
-    records = [_process_one(p, config, known_hashes, data_root) for p in pdf_files]
+    sender_lookup = _build_sender_email_lookup(data_root)
+    records = [_process_one(p, config, known_hashes, data_root, sender_lookup) for p in pdf_files]
 
     if records:
         write_staging_csv(records, output_dir)

@@ -25,6 +25,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+try:
+    from utils.email_utils import extract_body_text, extract_original_sender
+except ImportError:
+    from src.utils.email_utils import extract_body_text, extract_original_sender
+
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -44,7 +49,7 @@ GMAIL_SCOPES = [
 # InboundLog CSV カラム定義
 INBOUND_LOG_HEADERS = [
     "log_id", "message_id", "attachment_id",
-    "received_at", "sender_email",
+    "received_at", "sender_email", "original_sender_email",
     "file_name", "file_hash", "file_size_bytes",
     "saved_path", "process_status",
     "process_started_at", "process_finished_at",
@@ -218,6 +223,10 @@ def fetch_pdf_attachments(
         internal_date_ms = int(msg.get("internalDate", 0))
         received_at = datetime.fromtimestamp(internal_date_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
 
+        # 転送元（実際の送信者）メールアドレスを抽出
+        body_text = extract_body_text(msg.get("payload", {}))
+        _, original_sender_email = extract_original_sender(body_text, sender_email)
+
         # 添付ファイル探索
         pdf_parts = _find_pdf_parts(msg.get("payload", {}))
         if not pdf_parts:
@@ -252,6 +261,7 @@ def fetch_pdf_attachments(
                 append_inbound_log(log_path, {
                     "log_id": _new_id(), "message_id": message_id, "attachment_id": attachment_id,
                     "received_at": received_at, "sender_email": sender_email,
+                    "original_sender_email": original_sender_email,
                     "file_name": file_name, "file_hash": "", "file_size_bytes": 0,
                     "saved_path": "", "process_status": "FAILED",
                     "error_message": str(e), "created_at": _now(),
@@ -278,6 +288,7 @@ def fetch_pdf_attachments(
             append_inbound_log(log_path, {
                 "log_id": _new_id(), "message_id": message_id, "attachment_id": attachment_id,
                 "received_at": received_at, "sender_email": sender_email,
+                "original_sender_email": original_sender_email,
                 "file_name": file_name, "file_hash": file_hash, "file_size_bytes": file_size,
                 "saved_path": str(save_path), "process_status": "PENDING",
                 "created_at": _now(),

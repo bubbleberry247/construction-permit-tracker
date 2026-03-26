@@ -14,5 +14,9 @@
   "RETRY_MAX": 3,
   "RETRY_BASE_DELAY_SEC": 1.0,
   "STAGING_CSV_DIR": "output",
-  "LOG_LEVEL": "INFO"
+  "LOG_LEVEL": "INFO",
+  "COMPANY_MASTER_CSV": "output/company_master.csv",
+  "EMAIL_COMPANY_MAP_CSV": "output/email_company_map.csv",
+  "MLIT_CONFIRMATION_LOG_CSV": "logs/mlit_confirmation_log.csv",
+  "MLIT_CONFIRM_INTERVAL_DAYS": 90
 }
