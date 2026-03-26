@@ -104,12 +104,27 @@ EMAIL_TO_COMPANY: dict[str, str] = {
     "yui_takahashi@s-thing.co.jp": "株式会社サムシング",
     # --- accountant for しごとラボ ---
     "ito-zeimu713@sunny.ocn.ne.jp": "株式会社しごとラボ",
+    # --- 伊藤建設 (既存C0047にメアド紐付け) ---
+    "k-itoken@sk2.aitai.ne.jp": "株式会社伊藤建設",
+    # --- 非PDF添付メール由来 (ZIP/XLSX/クラウドDL) ---
+    "okazaki@taninomiya.co.jp": "谷ノ宮",
+    "tomida-y@infratec.co.jp": "株式会社インフラテック",
+    "ku-matsumoto@ota-shoji.co.jp": "太田商事株式会社",
+    "keiri@hashimoto-denki.jp": "橋本電機株式会社",
+    "c-kenso@katch.ne.jp": "中部建装株式会社",
+    "h.hayashi@akari-den.com": "株式会社あかり電工社",
+    "kouzou.0425@katch.ne.jp": "庭昭",
+    "k-kamiya@ootake.co.jp": "株式会社大嶽安城",
+    "kiyomi.yokoi@gterior.co.jp": "Gテリア株式会社",
+    "n.arimura@suzuki1963.co.jp": "株式会社スズキ",
+    "hiroko-i@k-ishihara.net": "株式会社イシハラ",
+    "daisuke@ifjp.com": "株式会社イフ",
+    "hironn@yk.commufa.jp": "新美総合建設",
 }
 
-# Emails to SKIP (not vendors)
+# Emails to SKIP (not vendors — not forwarded from shinsei.tic)
 SKIP_EMAILS: set[str] = {
-    "k-itoken@sk2.aitai.ne.jp",
-    "t-yamaguchi@acogroup.co.jp",
+    "t-yamaguchi@acogroup.co.jp",  # kalimistk直接メール、shinsei.tic転送ではない
 }
 
 # ---------------------------------------------------------------------------
@@ -130,6 +145,8 @@ EXPLICIT_EMAIL_TO_CID: dict[str, str] = {
     "nagoya@meisei-kenzai.co.jp": "C0014",
     # 「株式会社しごとラボ」 → C0038
     "ito-zeimu713@sunny.ocn.ne.jp": "C0038",
+    # 「株式会社伊藤建設」 → C0047
+    "k-itoken@sk2.aitai.ne.jp": "C0047",
     # 「豊鉄工業株式会社」 → C0057「豊錦工業株式会社」(OCR漢字誤り → 修正)
     "toyotetsu.takeda@gmail.com": "C0057",
 }
@@ -139,6 +156,18 @@ EXPLICIT_EMAIL_TO_CID: dict[str, str] = {
 # ---------------------------------------------------------------------------
 NAME_CORRECTIONS: dict[str, str] = {
     "C0057": "豊鉄工業株式会社",  # 豊錦 → 豊鉄 (OCR誤り修正)
+}
+
+# ---------------------------------------------------------------------------
+# Non-vendor companies to mark INACTIVE
+# ---------------------------------------------------------------------------
+INACTIVE_IDS: dict[str, str] = {
+    "C0003": "非建設業（NTPシステム）",
+    "C0020": "非建設業（IT協同組合）",
+    "C0032": "発注者（東海インプル建設＝自社）",
+    "C0033": "グループ会社（アルファホーム）",
+    "C0037": "非建設業（PCワールド）",
+    "C0040": "非建設業（クオカード）",
 }
 
 
@@ -383,7 +412,13 @@ def rebuild(master_path: Path, email_map_path: Path, *, dry_run: bool = False) -
         })
         stats["new"] += 1
 
-    # 5. Sort rows by company_id
+    # 5. Apply INACTIVE status to non-vendor companies
+    for row in rows:
+        cid = row.get("company_id", "")
+        if cid in INACTIVE_IDS:
+            row["status"] = "INACTIVE"
+
+    # 6. Sort rows by company_id
     rows.sort(key=lambda r: r.get("company_id", ""))
     email_map_rows.sort(key=lambda r: r.get("sender_email", ""))
 
