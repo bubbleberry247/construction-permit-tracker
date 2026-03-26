@@ -92,8 +92,10 @@ logger = logging.getLogger(__name__)
 _EXTRACT_PROMPT = """あなたは建設業許可証のOCR後処理エキスパートです。
 以下のOCRテキストから情報を抽出し、必ずJSON形式で回答してください。
 
+重要: テキストに複数ページの内容が含まれています。いずれかのページに建設業許可証または建設業許可証明書の内容が含まれていれば、document_typeは"建設業許可証"とし、その許可証の情報を抽出してください。
+
 抽出するフィールド:
-- document_type: ["建設業許可証", "決算書", "会社案内", "工事経歴書", "取引先一覧表", "新規継続取引申請書", "労働安全衛生誓約書", "その他"] のいずれか
+- document_type: ["建設業許可証", "決算書", "会社案内", "工事経歴書", "取引先一覧表", "新規継続取引申請書", "労働安全衛生誓約書", "その他"] のいずれか。複数種類のページがある場合は建設業許可証を優先
 - company_name_raw: 「許可を受けた者」の欄に記載された法人名または個人事業主名。宛先・担当者名ではない。株式会社・有限会社等の法人格を含む
 - permit_number_full: 許可番号（例: 愛知県知事 許可（特-6）第57805号）
 - permit_authority_name: 許可行政庁名（例: 愛知県知事）
@@ -224,16 +226,27 @@ def extract_text_from_pdf(pdf_path: Path) -> list[str]:
         raise RuntimeError(f"PDF テキスト抽出失敗: {pdf_path} — {exc}") from exc
 
 
-def _pdf_to_images(pdf_path: Path, max_pages: int = 3, dpi: int = 200) -> list[bytes]:
-    """PDF ページを PNG バイト列に変換する（PyMuPDF）。"""
+def _pdf_to_images(
+    pdf_path: Path, max_pages: int = 3, dpi: int = 200,
+    page_indices: list[int] | None = None,
+) -> list[bytes]:
+    """PDF ページを PNG バイト列に変換する（PyMuPDF）。
+    page_indices 指定時はそのページのみを変換する。
+    """
     import fitz  # noqa: PLC0415
     doc = fitz.open(str(pdf_path))
     images: list[bytes] = []
-    for i, page in enumerate(doc):
-        if i >= max_pages:
-            break
-        pix = page.get_pixmap(dpi=dpi)
-        images.append(pix.tobytes("png"))
+    if page_indices is not None:
+        for i in page_indices:
+            if i < len(doc):
+                pix = doc[i].get_pixmap(dpi=dpi)
+                images.append(pix.tobytes("png"))
+    else:
+        for i, page in enumerate(doc):
+            if i >= max_pages:
+                break
+            pix = page.get_pixmap(dpi=dpi)
+            images.append(pix.tobytes("png"))
     doc.close()
     return images
 
@@ -527,9 +540,21 @@ def _extract_and_check_confidence(
 
     if confidence < low_thresh:
         # テキスト抽出不足 → Vision fallback（画像を返す）
+        # 最初3ページ + 最後3ページを送信（許可証が末尾にある場合に対応）
         logger.info("[%s] テキスト抽出不足 (confidence=%.2f) → Vision fallback", pdf_path.name, confidence)
         try:
-            images = _pdf_to_images(pdf_path, max_pages=3, dpi=300)
+            import fitz as _fitz  # noqa: PLC0415
+            _doc = _fitz.open(str(pdf_path))
+            total_pages = len(_doc)
+            _doc.close()
+            if total_pages <= 6:
+                target = list(range(total_pages))
+            else:
+                head = list(range(3))
+                tail = list(range(total_pages - 3, total_pages))
+                target = head + [i for i in tail if i not in head]
+            logger.info("[%s] Vision: %dページ中 %s を送信", pdf_path.name, total_pages, target)
+            images = _pdf_to_images(pdf_path, dpi=300, page_indices=target)
             if not images:
                 result["error_category"] = TIER2_OCR_LOW_QUALITY
                 result["error_reason"] = "Vision fallback: ページ画像の生成に失敗"
@@ -539,6 +564,24 @@ def _extract_and_check_confidence(
             result["error_category"] = TIER2_OCR_LOW_QUALITY
             result["error_reason"] = f"Vision fallback 画像変換失敗: {exc}"
             return "", False
+
+    # 空白ページ（画像スキャン）が混在するか検出
+    # テキストが少ないページ（画像スキャンの可能性）を検出
+    empty_pages = [i for i, p in enumerate(pages) if len(p.strip()) < 100]
+    if empty_pages and len(empty_pages) >= 2:
+        # テキストページと空白（画像）ページが混在 → 空白ページをVisionで処理
+        logger.info(
+            "[%s] 空白ページ %d件検出 → 空白ページをVision処理",
+            pdf_path.name, len(empty_pages),
+        )
+        try:
+            # 空白ページを直接指定して画像化（最大3枚）
+            target_pages = empty_pages[:3]
+            empty_images = _pdf_to_images(pdf_path, dpi=300, page_indices=target_pages)
+            if empty_images:
+                return empty_images, True
+        except Exception as exc:
+            logger.warning("[%s] 空白ページVision変換失敗: %s", pdf_path.name, exc)
 
     if confidence < review_thresh:
         logger.warning("[%s] OCR信頼度低 (%.2f) — 処理は継続します", pdf_path.name, confidence)

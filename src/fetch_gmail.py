@@ -186,7 +186,8 @@ def fetch_pdf_attachments(
 
     # 未処理メール検索（PDFを含む、処理済みラベルなし）
     # Gmail query は label_name（表示名）で除外する。label_id は addLabelIds 専用
-    query = f'has:attachment filename:.pdf -label:"{label_name}"'
+    # shinsei.tic ラベル付きメールのみ対象（転送メール）
+    query = f'label:shinsei.tic has:attachment filename:.pdf -label:"{label_name}"'
     response = service.users().messages().list(
         userId="me",
         q=query,
