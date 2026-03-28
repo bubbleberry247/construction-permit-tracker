@@ -4,11 +4,23 @@ from app.database import get_db
 
 router = APIRouter(tags=["dashboard"])
 
+# (表示名, 必須フラグ) — 会社案内は任意（あれば）
 DOC_TYPES = [
     "取引申請書",
     "建設業許可証",
     "決算書",
     "会社案内",
+    "工事経歴書",
+    "取引先一覧表",
+    "労働安全衛生誓約書",
+    "資格略字一覧",
+    "労働者名簿",
+]
+
+REQUIRED_DOC_TYPES = [
+    "取引申請書",
+    "建設業許可証",
+    "決算書",
     "工事経歴書",
     "取引先一覧表",
     "労働安全衛生誓約書",
@@ -52,19 +64,18 @@ def _build_grid(conn):
         is_received = cid in received_ids
         company_types = doc_map.get(cid, set())
         cells = []
-        missing = []
         for dt in DOC_TYPES:
             found = dt in company_types
             cells.append({"found": found, "received": is_received})
-            if is_received and not found:
-                missing.append(dt)
+        # 不足判定は必須書類のみ（会社案内は任意なので除外）
+        missing = [dt for dt in REQUIRED_DOC_TYPES if dt not in company_types]
         grid.append({
             "company_id": cid,
             "official_name": comp["official_name"],
             "cells": cells,
             "is_received": is_received,
-            "missing": missing,
-            "missing_count": len(missing),
+            "missing": missing if is_received else [],
+            "missing_count": len(missing) if is_received else 0,
             "complete": len(missing) == 0 and is_received,
         })
 

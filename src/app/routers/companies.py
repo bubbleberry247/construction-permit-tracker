@@ -42,8 +42,8 @@ def nav_companies(filter: str = Query("all")):
                 doc_map[cid] = set()
             doc_map[cid].add(dtn)
 
-        DOC_TYPES = [
-            "取引申請書", "建設業許可証", "決算書", "会社案内",
+        REQUIRED_DOC_TYPES = [
+            "取引申請書", "建設業許可証", "決算書",
             "工事経歴書", "取引先一覧表", "労働安全衛生誓約書",
             "資格略字一覧", "労働者名簿",
         ]
@@ -53,7 +53,7 @@ def nav_companies(filter: str = Query("all")):
             cid = comp["company_id"]
             is_received = cid in received_ids
             company_types = doc_map.get(cid, set())
-            missing_count = sum(1 for dt in DOC_TYPES if dt not in company_types)
+            missing_count = sum(1 for dt in REQUIRED_DOC_TYPES if dt not in company_types)
             is_complete = is_received and missing_count == 0
 
             include = False
