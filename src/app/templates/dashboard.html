@@ -1,0 +1,102 @@
+{% extends "layout.html" %}
+{% block title %}ダッシュボード - 建設業許可証管理{% endblock %}
+
+{% block content %}
+<div class="dashboard-container">
+
+    <!-- サマリ統計 -->
+    <div style="display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap;">
+        <div class="stat-card">
+            <div class="stat-value">{{ total_active }}</div>
+            <div class="stat-label">ACTIVE会社</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" style="color:#4CAF50;">{{ total_received }}</div>
+            <div class="stat-label">メール受信済み</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" style="color:#f44336;">{{ total_unreceived }}</div>
+            <div class="stat-label">未受信</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" style="color:#2196F3;">{{ total_complete }}</div>
+            <div class="stat-label">全書類揃い</div>
+        </div>
+    </div>
+
+    <!-- 書類種別別充足率 -->
+    <div style="margin-bottom:20px;background:#16213e;border-radius:8px;padding:16px;">
+        <h3 style="color:#e94560;margin-bottom:12px;font-size:14px;">書類種別別充足率（受信{{ total_received }}社ベース）</h3>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;">
+            {% for ds in doc_stats %}
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-size:12px;color:#888;min-width:80px;">{{ ds.name[:6] }}</span>
+                <div style="flex:1;background:#1a1a2e;border-radius:4px;height:18px;overflow:hidden;">
+                    <div style="width:{{ ds.pct }}%;height:100%;background:{% if ds.pct >= 90 %}#4CAF50{% elif ds.pct >= 70 %}#FF9800{% else %}#f44336{% endif %};border-radius:4px;"></div>
+                </div>
+                <span style="font-size:11px;color:#e0e0e0;min-width:55px;text-align:right;">{{ ds.count }}/{{ ds.total }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- フィルタボタン -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+        <a href="/dashboard?show=all" class="filter-btn {% if show == 'all' %}active{% endif %}">全社 ({{ total_active }})</a>
+        <a href="/dashboard?show=received" class="filter-btn {% if show == 'received' %}active{% endif %}">受信済み ({{ total_received }})</a>
+        <a href="/dashboard?show=missing" class="filter-btn {% if show == 'missing' %}active{% endif %}" style="{% if show == 'missing' %}background:#f44336;{% endif %}">不足あり</a>
+        <a href="/dashboard?show=complete" class="filter-btn {% if show == 'complete' %}active{% endif %}" style="{% if show == 'complete' %}background:#4CAF50;{% endif %}">全揃い ({{ total_complete }})</a>
+        <a href="/dashboard?show=unreceived" class="filter-btn {% if show == 'unreceived' %}active{% endif %}">未受信 ({{ total_unreceived }})</a>
+    </div>
+
+    <!-- 表示中の件数 -->
+    <p style="color:#888;font-size:12px;margin-bottom:8px;">表示: {{ grid | length }}社</p>
+
+    <!-- グリッド -->
+    <div class="grid-wrapper">
+        <table class="doc-grid">
+            <thead>
+                <tr>
+                    <th class="th-company">会社名</th>
+                    {% for dt in doc_types %}
+                    <th class="th-doc">{{ dt[:4] }}</th>
+                    {% endfor %}
+                    <th class="th-doc" style="min-width:120px;">不足書類</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in grid %}
+                <tr class="{% if row.complete %}row-complete{% elif not row.is_received %}row-unreceived{% elif row.missing_count > 0 %}row-missing{% endif %}">
+                    <td class="td-company">
+                        <a href="/viewer/{{ row.company_id }}?filter={{ show }}">
+                            <span class="company-id">{{ row.company_id }}</span>
+                            {{ row.official_name }}
+                        </a>
+                    </td>
+                    {% for cell in row.cells %}
+                    <td class="td-doc">
+                        {% if not cell.received %}
+                        <span class="cell-na">-</span>
+                        {% elif cell.found %}
+                        <span class="cell-ok">○</span>
+                        {% else %}
+                        <span class="cell-ng">×</span>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                    <td class="td-missing">
+                        {% if not row.is_received %}
+                        <span style="color:#666;font-size:11px;">未受信</span>
+                        {% elif row.missing_count > 0 %}
+                        <span style="color:#f44336;font-size:11px;">{{ row.missing | join(', ') }}</span>
+                        {% else %}
+                        <span style="color:#4CAF50;font-size:11px;">✓ 全揃い</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

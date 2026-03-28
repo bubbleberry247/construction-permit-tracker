@@ -189,10 +189,11 @@ def fetch_pdf_attachments(
     processed_pairs = load_inbound_log(log_path)
     logger.info("既処理ペア数: %d", len(processed_pairs))
 
-    # 未処理メール検索（PDFを含む、処理済みラベルなし）
+    # 未処理メール検索（全添付ファイル対象、処理済みラベルなし）
     # Gmail query は label_name（表示名）で除外する。label_id は addLabelIds 専用
     # shinsei.tic ラベル付きメールのみ対象（転送メール）
-    query = f'label:shinsei.tic has:attachment filename:.pdf -label:"{label_name}"'
+    # NOTE: filename:.pdf → has:attachment に変更（ZIP/XLSX等も取得するため）
+    query = f'label:shinsei.tic has:attachment -label:"{label_name}"'
     response = service.users().messages().list(
         userId="me",
         q=query,
@@ -235,10 +236,9 @@ def fetch_pdf_attachments(
         any_new = False
         for part in pdf_parts:
             attachment_id = part.get("body", {}).get("attachmentId", "")
-            file_name = sanitize_filename(part.get("filename", "attachment.pdf"))
+            file_name = sanitize_filename(part.get("filename", "attachment"))
 
-            if not file_name.lower().endswith(".pdf"):
-                continue
+            # 全ファイル形式を受け入れる（PDF/ZIP/XLSX等）
 
             # 冪等チェック（一次判定: message_id + attachment_id）
             if (message_id, attachment_id) in processed_pairs:
@@ -313,14 +313,20 @@ def fetch_pdf_attachments(
     return saved_count
 
 
-def _find_pdf_parts(payload: dict) -> list[dict]:
-    """メッセージ payload から PDF パートを再帰的に探す。"""
+def _find_attachment_parts(payload: dict) -> list[dict]:
+    """メッセージ payload から全添付ファイルパートを再帰的に探す（PDF/ZIP/XLSX等）。"""
     parts: list[dict] = []
-    if payload.get("filename", "").lower().endswith(".pdf") and payload.get("body", {}).get("attachmentId"):
+    filename = payload.get("filename", "")
+    if filename and payload.get("body", {}).get("attachmentId"):
         parts.append(payload)
     for child in payload.get("parts", []):
-        parts.extend(_find_pdf_parts(child))
+        parts.extend(_find_attachment_parts(child))
     return parts
+
+
+def _find_pdf_parts(payload: dict) -> list[dict]:
+    """後方互換: 全添付ファイルを返す（旧名維持）。"""
+    return _find_attachment_parts(payload)
 
 
 def _now() -> str:

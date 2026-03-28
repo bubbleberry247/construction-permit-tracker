@@ -1,0 +1,525 @@
+{% extends "layout.html" %}
+{% block title %}ビューア - 建設業許可証管理{% endblock %}
+
+{% block head %}
+<style>
+/* Viewer-specific layout overrides */
+main { padding: 0 !important; height: calc(100vh - 48px); overflow: hidden; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="viewer-container">
+
+<!-- Left Pane: Company selector + Thumbnails -->
+<div id="left-pane">
+    <div id="company-selector">
+        <a href="/dashboard" id="company-nav-back">← ダッシュボード</a>
+        <div class="company-nav-row">
+            <button id="btn-prev" class="nav-btn" onclick="navigateCompany(-1)">◀</button>
+            <select id="company-select" onchange="onCompanySelect(this.value)">
+                <option value="">-- 会社を選択 --</option>
+            </select>
+            <button id="btn-next" class="nav-btn" onclick="navigateCompany(1)">▶</button>
+        </div>
+        <div class="nav-filter-row">
+            <button class="nav-filter-btn active" data-filter="all" onclick="fetchNavList('all')">全社</button>
+            <button class="nav-filter-btn" data-filter="received" onclick="fetchNavList('received')">受信済</button>
+            <button class="nav-filter-btn" data-filter="missing" onclick="fetchNavList('missing')">不足あり</button>
+            <button class="nav-filter-btn" data-filter="complete" onclick="fetchNavList('complete')">全揃い</button>
+            <button class="nav-filter-btn" data-filter="unreceived" onclick="fetchNavList('unreceived')">未受信</button>
+        </div>
+        <div id="nav-position">- / -社</div>
+        <div class="info" id="page-count-info"></div>
+        <div id="missing-docs" style="display:none;"></div>
+    </div>
+    <div id="thumb-list"></div>
+</div>
+
+<!-- Center Pane: Image viewer -->
+<div id="center-pane">
+    <div id="image-toolbar">
+        <button onclick="zoomOut()" title="縮小">&#x2212;</button>
+        <span class="zoom-level" id="zoom-display">100%</span>
+        <button onclick="zoomIn()" title="拡大">+</button>
+        <span class="sep">|</span>
+        <button onclick="rotateViewLeft()" title="左90度回転">&#x21BA;</button>
+        <button onclick="rotateViewRight()" title="右90度回転">&#x21BB;</button>
+        <span class="sep">|</span>
+        <button onclick="resetView()" title="リセット">リセット</button>
+    </div>
+    <div id="image-viewport">
+        <img id="main-image" src="" alt="ページを選択してください">
+    </div>
+</div>
+
+<!-- Right Pane: Page info + OCR data -->
+<div id="right-pane">
+    <div class="panel-header">書類情報</div>
+    <div id="panel-content">
+        <p style="color:#666; margin-top:20px;">左のサムネイルをクリックしてください。</p>
+    </div>
+</div>
+
+</div>
+
+<div class="keyboard-hint">
+    <kbd>&larr;</kbd><kbd>&rarr;</kbd> 前後ページ &nbsp;|&nbsp;
+    <kbd>Ctrl+&larr;</kbd><kbd>Ctrl+&rarr;</kbd> 前後会社 &nbsp;|&nbsp;
+    <kbd>Scroll</kbd> ズーム &nbsp;|&nbsp;
+    <kbd>DblClick</kbd> リセット
+</div>
+
+<script>
+const DOC_TYPES = [
+    '取引申請書','建設業許可証','決算書','会社案内',
+    '工事経歴書','取引先一覧表','労働安全衛生誓約書','資格略字一覧',
+    '労働者名簿','その他/不明'
+];
+const BADGE_COLORS = {
+    '取引申請書':'#2196F3','建設業許可証':'#f44336','決算書':'#4CAF50',
+    '会社案内':'#9C27B0','工事経歴書':'#FF9800','取引先一覧表':'#795548',
+    '労働安全衛生誓約書':'#009688','資格略字一覧':'#607D8B',
+    '労働者名簿':'#E91E63'
+};
+
+let companyData = null;   // {company, pages, permits}
+let currentPageIdx = 0;
+let zoomLevel = 100;
+let viewRotation = 0;
+
+let navList = [];
+let navFilter = 'all';
+let navCurrentIdx = -1;
+
+// --- Company loading ---
+async function loadCompany(companyId) {
+    if (!companyId) return;
+    try {
+        const resp = await fetch('/api/companies/' + companyId);
+        if (!resp.ok) throw new Error(resp.statusText);
+        companyData = await resp.json();
+        currentPageIdx = 0;
+        zoomLevel = 100;
+        viewRotation = 0;
+        document.getElementById('page-count-info').textContent =
+            companyData.pages.length + ' ページ';
+
+        // 不足書類を計算して表示 + ステータスボタンハイライト
+        const REQUIRED = ['取引申請書','建設業許可証','決算書','会社案内','工事経歴書','取引先一覧表','労働安全衛生誓約書','資格略字一覧','労働者名簿'];
+        const found = new Set(companyData.pages.map(p => p.doc_type_name));
+        const missing = REQUIRED.filter(dt => !found.has(dt));
+        const missingDiv = document.getElementById('missing-docs');
+
+        // 会社ステータスを判定
+        let companyStatus = 'all';
+        if (!companyData.mail_received) {
+            companyStatus = 'unreceived';
+        } else if (missing.length === 0) {
+            companyStatus = 'complete';
+        } else {
+            companyStatus = 'missing';
+        }
+
+        // フィルタボタンに会社ステータスをリング表示
+        document.querySelectorAll('.nav-filter-btn').forEach(btn => {
+            btn.classList.remove('status-current');
+            if (btn.dataset.filter === companyStatus) {
+                btn.classList.add('status-current');
+            }
+        });
+
+        if (!companyData.mail_received) {
+            missingDiv.style.display = 'none';
+        } else if (missing.length > 0) {
+            missingDiv.style.display = 'block';
+            missingDiv.innerHTML = '<span style="color:#f44336;font-size:11px;font-weight:bold;">⚠ 不足: </span>' +
+                missing.map(m => '<span style="background:#f44336;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;margin:1px;">' + m + '</span>').join(' ');
+        } else {
+            missingDiv.style.display = 'none';
+        }
+
+        renderThumbnails();
+        if (companyData.pages.length > 0) {
+            selectPage(0);
+        } else {
+            document.getElementById('main-image').src = '';
+            document.getElementById('panel-content').innerHTML =
+                '<p style="color:#666;">このフォルダにページはありません。</p>';
+        }
+        navCurrentIdx = navList.findIndex(c => c.company_id === companyId);
+        updateNavUI();
+    } catch (e) {
+        console.error('loadCompany error:', e);
+    }
+}
+
+// --- Company navigation ---
+async function fetchNavList(filter) {
+    navFilter = filter || 'all';
+    const resp = await fetch('/api/companies/nav?filter=' + navFilter);
+    const data = await resp.json();
+    navList = data.companies;
+
+    // Rebuild dropdown
+    const sel = document.getElementById('company-select');
+    sel.innerHTML = '<option value="">-- 会社を選択 --</option>';
+    navList.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.company_id;
+        opt.textContent = c.company_id + ' ' + c.official_name;
+        sel.appendChild(opt);
+    });
+
+    // Update filter button active states
+    document.querySelectorAll('.nav-filter-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === navFilter);
+    });
+
+    // Re-find current company
+    if (typeof companyData !== 'undefined' && companyData && companyData.company) {
+        navCurrentIdx = navList.findIndex(c => c.company_id === companyData.company.company_id);
+    }
+    updateNavUI();
+}
+
+async function navigateCompany(delta) {
+    if (navList.length === 0) return;
+    await fetchNavList(navFilter);  // Re-fetch for latest DB state
+
+    let newIdx = navCurrentIdx + delta;
+    if (newIdx < 0 || newIdx >= navList.length) return;
+
+    const cid = navList[newIdx].company_id;
+    document.getElementById('company-select').value = cid;
+    navCurrentIdx = newIdx;
+
+    history.replaceState(null, '', '/viewer/' + cid + '?filter=' + navFilter);
+    await loadCompany(cid);
+    updateNavUI();
+}
+
+function onCompanySelect(companyId) {
+    if (!companyId) return;
+    navCurrentIdx = navList.findIndex(c => c.company_id === companyId);
+    history.replaceState(null, '', '/viewer/' + companyId + '?filter=' + navFilter);
+    loadCompany(companyId);
+    updateNavUI();
+}
+
+function updateNavUI() {
+    const posEl = document.getElementById('nav-position');
+    const prevBtn = document.getElementById('btn-prev');
+    const nextBtn = document.getElementById('btn-next');
+
+    if (navCurrentIdx >= 0) {
+        posEl.textContent = (navCurrentIdx + 1) + ' / ' + navList.length + '社';
+    } else {
+        posEl.textContent = '- / ' + navList.length + '社';
+    }
+
+    prevBtn.disabled = (navCurrentIdx <= 0);
+    nextBtn.disabled = (navCurrentIdx >= navList.length - 1 || navCurrentIdx < 0);
+}
+
+// --- Thumbnails ---
+function renderThumbnails() {
+    const container = document.getElementById('thumb-list');
+    container.innerHTML = '';
+    if (!companyData) return;
+    const cid = companyData.company.company_id;
+
+    companyData.pages.forEach((pg, idx) => {
+        const div = document.createElement('div');
+        div.className = 'thumb-item' + (idx === currentPageIdx ? ' active' : '');
+        div.onclick = () => selectPage(idx);
+
+        const img = document.createElement('img');
+        img.src = '/api/images/' + cid + '/' + encodeURIComponent(pg.file_name) + '/' + pg.page_no + '?dpi=50';
+        img.loading = 'lazy';
+
+        const badge = document.createElement('div');
+        badge.className = 'thumb-badge';
+        const dtn = pg.doc_type_name || '不明';
+        badge.style.backgroundColor = BADGE_COLORS[dtn] || '#9E9E9E';
+        badge.textContent = dtn.substring(0, 4);
+
+        const pageNo = document.createElement('div');
+        pageNo.className = 'thumb-page-no';
+        pageNo.textContent = 'P' + pg.page_no;
+
+        div.appendChild(img);
+        div.appendChild(badge);
+        div.appendChild(pageNo);
+        container.appendChild(div);
+    });
+}
+
+// --- Page selection ---
+function selectPage(idx) {
+    currentPageIdx = idx;
+    zoomLevel = 100;
+    viewRotation = 0;
+
+    // Update thumbnail active state
+    const thumbs = document.querySelectorAll('.thumb-item');
+    thumbs.forEach((t, i) => {
+        t.className = 'thumb-item' + (i === idx ? ' active' : '');
+    });
+    if (thumbs[idx]) thumbs[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // Load main image
+    const pg = companyData.pages[idx];
+    const cid = companyData.company.company_id;
+    const mainImg = document.getElementById('main-image');
+    mainImg.src = '/api/images/' + cid + '/' + encodeURIComponent(pg.file_name) + '/' + pg.page_no + '?dpi=150';
+    applyTransform();
+    updatePanel();
+}
+
+// --- Zoom / Rotate ---
+let baseWidth = 0;  // 画像の自然幅
+let baseHeight = 0; // 画像の自然高
+
+function zoomIn() { zoomLevel = Math.min(400, zoomLevel + 25); applyTransform(); }
+function zoomOut() { zoomLevel = Math.max(25, zoomLevel - 25); applyTransform(); }
+function rotateViewLeft() { viewRotation = (viewRotation - 90) % 360; applyTransform(); }
+function rotateViewRight() { viewRotation = (viewRotation + 90) % 360; applyTransform(); }
+function resetView() { zoomLevel = 100; viewRotation = 0; applyTransform(); }
+
+function applyTransform() {
+    const img = document.getElementById('main-image');
+    const vp = document.getElementById('image-viewport');
+    const scale = zoomLevel / 100;
+
+    // 自然サイズを取得（初回）
+    if (!baseWidth && img.naturalWidth) {
+        baseWidth = img.naturalWidth;
+        baseHeight = img.naturalHeight;
+    }
+    const vpW = vp.clientWidth - 20;
+    const vpH = vp.clientHeight - 20;
+
+    if (zoomLevel <= 100) {
+        // フィットモード: 親に収まる
+        img.style.maxWidth = '100%';
+        img.style.maxHeight = 'calc(100vh - 80px)';
+        img.style.width = 'auto';
+        img.style.height = 'auto';
+    } else {
+        // 拡大モード: 実サイズを変更してスクロール可能に
+        const fitScale = Math.min(vpW / (baseWidth || 800), vpH / (baseHeight || 1100));
+        const w = (baseWidth || 800) * fitScale * scale;
+        const h = (baseHeight || 1100) * fitScale * scale;
+        img.style.maxWidth = 'none';
+        img.style.maxHeight = 'none';
+        img.style.width = w + 'px';
+        img.style.height = h + 'px';
+    }
+    img.style.transform = 'rotate(' + viewRotation + 'deg)';
+    document.getElementById('zoom-display').textContent = zoomLevel + '%';
+}
+
+// 画像読み込み時に自然サイズを記録
+document.getElementById('main-image').addEventListener('load', function() {
+    baseWidth = this.naturalWidth;
+    baseHeight = this.naturalHeight;
+    applyTransform();
+});
+
+// --- Right panel ---
+function updatePanel() {
+    if (!companyData) return;
+    const pg = companyData.pages[currentPageIdx];
+    const comp = companyData.company;
+    const permits = companyData.permits || [];
+
+    let html = '';
+
+    // Company
+    html += '<div class="panel-section"><h3>会社名</h3>';
+    html += '<div class="panel-value">' + comp.company_id + ' ' + comp.official_name + '</div></div>';
+
+    // Page info
+    html += '<div class="panel-section"><h3>ページ</h3>';
+    html += '<div class="panel-value">' + (currentPageIdx + 1) + ' / ' + companyData.pages.length;
+    html += ' &nbsp; <span style="color:#888;font-size:12px;">' + pg.file_name + ' P' + pg.page_no + '</span>';
+    html += '</div></div>';
+
+    // Doc type dropdown
+    const currentType = pg.doc_type_name || '不明';
+    html += '<div class="panel-section"><h3>書類種別</h3>';
+    html += '<div class="panel-value">';
+    html += '<select id="doc-type-select" onchange="saveDocType(this.value)" class="panel-select">';
+    DOC_TYPES.forEach(dt => {
+        const sel = (dt === currentType) ? ' selected' : '';
+        html += '<option value="' + dt + '"' + sel + '>' + dt + '</option>';
+    });
+    // If current type is not in DOC_TYPES, add it
+    if (!DOC_TYPES.includes(currentType)) {
+        html += '<option value="' + currentType + '" selected>' + currentType + '</option>';
+    }
+    html += '</select>';
+    html += '</div></div>';
+
+    // Rotation correction
+    const currentRot = pg.rotation || 0;
+    html += '<div class="panel-section"><h3>回転補正</h3>';
+    html += '<div class="panel-value" style="display:flex;gap:8px;">';
+    [0, 90, 180, 270].forEach(deg => {
+        const active = (deg === currentRot) ? ' style="background:#e94560;border-color:#e94560;"' : '';
+        html += '<button class="rot-btn" onclick="saveRotation(' + deg + ')"' + active + '>' + deg + '&deg;</button>';
+    });
+    html += '</div></div>';
+
+    // Confidence
+    if (pg.confidence !== null && pg.confidence !== undefined) {
+        const pct = (pg.confidence * 100).toFixed(0);
+        html += '<div class="panel-section"><h3>分類確信度</h3>';
+        html += '<div class="panel-value">' + pct + '%</div></div>';
+    }
+
+    // Permit OCR data
+    if (permits.length > 0) {
+        html += '<div class="ocr-section"><h3>許可証OCRデータ</h3>';
+        permits.forEach(p => {
+            html += '<div class="ocr-field"><span class="ocr-label">許可番号</span><span class="ocr-value">' + (p.permit_number || '-') + '</span></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">許可行政庁</span><span class="ocr-value">' + (p.permit_authority || '-') + '</span></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">区分</span><span class="ocr-value">' + (p.permit_category || '-') + '</span></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">許可年</span><span class="ocr-value">' + (p.permit_year || '-') + '</span></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">発行日</span><span class="ocr-value">' + (p.issue_date || '-') + '</span></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">有効期限</span><span class="ocr-value">' + (p.expiry_date || '-') + '</span></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">業種</span><span class="ocr-value" style="font-size:11px;">' + (p.trade_names || '-') + '</span></div>';
+            html += '<hr style="border-color:#333;margin:8px 0;">';
+        });
+        html += '</div>';
+    }
+
+    document.getElementById('panel-content').innerHTML = html;
+}
+
+// --- Save doc type via API ---
+async function saveDocType(newType) {
+    if (!companyData) return;
+    const pg = companyData.pages[currentPageIdx];
+    try {
+        const resp = await fetch(
+            '/api/pages/' + pg.page_id,
+            {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ doc_type_name: newType }),
+            }
+        );
+        if (resp.ok) {
+            const updated = await resp.json();
+            companyData.pages[currentPageIdx] = updated;
+            renderThumbnails();
+        }
+    } catch (e) {
+        console.error('saveDocType error:', e);
+    }
+}
+
+// --- Save rotation via API ---
+async function saveRotation(deg) {
+    if (!companyData) return;
+    const pg = companyData.pages[currentPageIdx];
+    try {
+        const resp = await fetch(
+            '/api/pages/' + pg.page_id,
+            {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rotation: deg }),
+            }
+        );
+        if (resp.ok) {
+            const updated = await resp.json();
+            companyData.pages[currentPageIdx] = updated;
+            renderThumbnails();
+            updatePanel();
+        }
+    } catch (e) {
+        console.error('saveRotation error:', e);
+    }
+}
+
+// --- Keyboard navigation ---
+document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+
+    if (e.ctrlKey && (e.key === 'ArrowLeft' || e.key === 'ArrowUp')) {
+        e.preventDefault();
+        navigateCompany(-1);
+        return;
+    }
+    if (e.ctrlKey && (e.key === 'ArrowRight' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        navigateCompany(+1);
+        return;
+    }
+
+    if (!companyData || companyData.pages.length === 0) return;
+
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (currentPageIdx < companyData.pages.length - 1) selectPage(currentPageIdx + 1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (currentPageIdx > 0) selectPage(currentPageIdx - 1);
+    }
+});
+
+// --- Mouse wheel zoom ---
+document.getElementById('image-viewport').addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (e.deltaY < 0) zoomIn();
+    else zoomOut();
+}, { passive: false });
+
+// --- Double click reset ---
+document.getElementById('image-viewport').addEventListener('dblclick', () => {
+    resetView();
+});
+
+// --- Drag to pan ---
+(function() {
+    const vp = document.getElementById('image-viewport');
+    let dragging = false, startX, startY, scrollX, scrollY;
+    vp.addEventListener('mousedown', (e) => {
+        dragging = true;
+        vp.classList.add('dragging');
+        startX = e.pageX - vp.offsetLeft;
+        startY = e.pageY - vp.offsetTop;
+        scrollX = vp.scrollLeft;
+        scrollY = vp.scrollTop;
+    });
+    vp.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        e.preventDefault();
+        const x = e.pageX - vp.offsetLeft;
+        const y = e.pageY - vp.offsetTop;
+        vp.scrollLeft = scrollX - (x - startX);
+        vp.scrollTop = scrollY - (y - startY);
+    });
+    vp.addEventListener('mouseup', () => { dragging = false; vp.classList.remove('dragging'); });
+    vp.addEventListener('mouseleave', () => { dragging = false; vp.classList.remove('dragging'); });
+})();
+
+// --- Auto-load if initial company set ---
+(async function() {
+    const params = new URLSearchParams(window.location.search);
+    navFilter = params.get('filter') || '{{ initial_filter | default("all") }}';
+    await fetchNavList(navFilter);
+
+    const initialId = '{{ initial_company_id | default("") }}';
+    if (initialId) {
+        navCurrentIdx = navList.findIndex(c => c.company_id === initialId);
+        document.getElementById('company-select').value = initialId;
+        await loadCompany(initialId);
+    }
+    updateNavUI();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>{% block title %}建設業許可証管理{% endblock %}</title>
+<link rel="stylesheet" href="/static/css/style.css">
+{% block head %}{% endblock %}
+</head>
+<body>
+<nav class="main-nav">
+    <a href="/dashboard" class="nav-brand">建設業許可証管理</a>
+    <div class="nav-links">
+        <a href="/dashboard">ダッシュボード</a>
+        <a href="/viewer">ビューア</a>
+    </div>
+</nav>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>
