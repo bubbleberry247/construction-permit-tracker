@@ -29,13 +29,9 @@ var Mailer = {
    */
   _getStageMessage: function(stage) {
     var messages = {
-      '120': '許可証の更新手続の準備を開始してください。満了日まで120日前後となりました。',
-      '90':  '申請手続を開始してください。また、受付票（控え）の提出もお願いします。満了日まで90日前後となりました。',
-      '60':  '更新手続の進捗をご確認ください。受付票（控え）をまだご提出いただいていない場合は、至急ご提出ください。満了日まで60日前後となりました。',
-      '45':  '受付票（控え）が未提出の場合は至急ご提出ください。満了日まで45日前後となりました。',
-      '30':  '【最終警告】受付票が未提出の場合、発注・入場に影響が生じる可能性があります。満了日まで30日前後となりました。速やかにご対応ください。',
-      '14':  '【発注停止予告】許可証の有効期限まで14日です。至急状況をご確認の上、ご連絡ください。',
-      '0':   '本日が許可証の満了日です。更新状況をご確認ください。',
+      '150': '許可証の有効期限まで約150日となりました。更新手続きに必要な書類の準備を開始してください。',
+      '90':  '許可証の有効期限まで約90日です。更新申請の受付期間に入りましたので、申請手続きを開始してください。受付票（控え）の提出もお願いいたします。',
+      '30':  '【最終警告】許可証の有効期限まで約30日です。更新手続きが完了していない場合、発注・入場に影響が生じる可能性があります。至急ご対応ください。',
       'EXPIRED': '許可証の有効期限が切れています。至急更新手続きをご確認ください。このまま更新が確認できない場合、発注・入場を停止させていただく場合があります。'
     };
     return messages[String(stage)] || '許可証の更新についてご確認ください。';
@@ -160,7 +156,7 @@ var Mailer = {
     var subject = '【受領確認】建設業許可証を受領しました（' + (company.company_name_normalized || company.company_name_raw) + '）';
 
     // 次回通知予定ステージを算出
-    var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '120,90,60,45,30,14,0';
+    var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '150,90,30';
     var stageDays = stagesStr.split(',').map(function(s) { return parseInt(s.trim(), 10); })
                              .filter(function(n) { return !isNaN(n); })
                              .sort(function(a, b) { return b - a; });
@@ -256,10 +252,10 @@ var Mailer = {
     var permits = PermitsModel.getAllActive();
     var today = new Date();
 
-    // 120日以内の許可証を抽出
+    // 180日以内の許可証を抽出（150日通知に合わせてバッファ）
     var nearExpiry = permits.filter(function(p) {
       var d = daysUntil(p.expiry_date);
-      return !isNaN(d) && d <= 120;
+      return !isNaN(d) && d <= 180;
     }).sort(function(a, b) {
       return daysUntil(a.expiry_date) - daysUntil(b.expiry_date);
     });

@@ -35,12 +35,38 @@ OUTPUT_PATH = PROJECT_ROOT / "output" / "継続取引業者リスト_出力.xlsx
 TODAY = date.today()
 
 # ---------------------------------------------------------------------------
-# 列幅定義 (A-P)
+# 29業種定義 (略称, 正式名称)
 # ---------------------------------------------------------------------------
-COL_WIDTHS: list[int] = [30, 10, 12, 12, 28, 4, 4, 8, 12, 35, 12, 12, 12, 40, 14, 14]
+TRADE_29: list[tuple[str, str]] = [
+    ("土", "土木工事業"), ("建", "建築工事業"), ("大", "大工工事業"), ("左", "左官工事業"),
+    ("と", "とび・土工工事業"), ("石", "石工事業"), ("屋", "屋根工事業"), ("電", "電気工事業"),
+    ("管", "管工事業"), ("タ", "タイル・れんが・ブロック工事業"), ("鋼", "鋼構造物工事業"),
+    ("筋", "鉄筋工事業"), ("舗", "舗装工事業"), ("しゅ", "しゅんせつ工事業"),
+    ("板", "板金工事業"), ("ガ", "ガラス工事業"), ("塗", "塗装工事業"), ("防", "防水工事業"),
+    ("内", "内装仕上工事業"), ("機", "機械器具設置工事業"), ("絶", "熱絶縁工事業"),
+    ("通", "電気通信工事業"), ("園", "造園工事業"), ("井", "さく井工事業"),
+    ("具", "建具工事業"), ("水", "水道施設工事業"), ("消", "消防施設工事業"),
+    ("清", "清掃施設工事業"), ("解", "解体工事業"),
+]
+
+# 業種マッチング用キーワード (正式名称から「工事業」を除いた部分で部分一致)
+TRADE_MATCH_KEYS: list[str] = [
+    name.replace("工事業", "") for _, name in TRADE_29
+]
 
 # ---------------------------------------------------------------------------
-# ヘッダ定義 (A-P)
+# 列幅定義
+# A-I (9列) + 29業種列(幅3) + AM-AT (8列)
+# ---------------------------------------------------------------------------
+COL_WIDTHS: list[int] = (
+    [30, 10, 12, 12, 28, 4, 4, 8, 12]  # A-I
+    + [3] * 29                            # J-AL (29業種)
+    + [12, 12, 12, 40, 14, 12, 35, 14]   # AM-AT
+)
+
+# ---------------------------------------------------------------------------
+# ヘッダ定義
+# A-I (9列) + 29業種略称 + AM-AT (8列)
 # ---------------------------------------------------------------------------
 HEADERS: list[str] = [
     "会社名",               # A
@@ -52,14 +78,36 @@ HEADERS: list[str] = [
     "",                     # G (年)
     "",                     # H (番号)
     "許可区分（知事／大臣）",  # I
-    "許可業種",             # J
-    "許可満了日",           # K
-    "更新確認日",           # L
-    "許可証受領日",         # M
-    "データ保存場所（フォルダパス）",  # N
-    "現在ステータス",       # O
-    "直近1年発注実績",      # P
+] + [abbr for abbr, _ in TRADE_29] + [  # J-AL (29業種)
+    "許可満了日",           # AM
+    "更新確認日",           # AN
+    "許可証受領日",         # AO
+    "データ保存場所（フォルダパス）",  # AP
+    "現在ステータス",       # AQ
+    "書類ステータス",       # AR
+    "不足書類",             # AS
+    "直近1年発注実績",      # AT
 ]
+
+# 業種列の開始・終了列インデックス (1-based)
+TRADE_COL_START = 10  # J列
+TRADE_COL_END = 10 + 29 - 1  # AL列 (38)
+# シフト後の列インデックス (1-based)
+COL_EXPIRY = TRADE_COL_END + 1      # AM (39)
+COL_REVIEW_DATE = TRADE_COL_END + 2  # AN (40)
+COL_RECEIPT = TRADE_COL_END + 3      # AO (41)
+COL_FOLDER = TRADE_COL_END + 4       # AP (42)
+COL_STATUS = TRADE_COL_END + 5       # AQ (43)
+COL_DOC_STATUS = TRADE_COL_END + 6   # AR (44)
+COL_MISSING_DOCS = TRADE_COL_END + 7 # AS (45)
+COL_ORDER = TRADE_COL_END + 8        # AT (46)
+
+# 中央揃え列インデックスセット (1-based) — F,G,H,I + 29業種 + AM,AN,AO,AQ,AR,AT
+CENTER_COLS: set[int] = (
+    {6, 7, 8, 9}
+    | set(range(TRADE_COL_START, TRADE_COL_END + 1))
+    | {COL_EXPIRY, COL_REVIEW_DATE, COL_RECEIPT, COL_STATUS, COL_DOC_STATUS, COL_ORDER}
+)
 
 # ---------------------------------------------------------------------------
 # スタイル定数
@@ -77,16 +125,39 @@ THIN_BORDER = Border(
 ALIGN_CENTER = Alignment(horizontal="center", vertical="center")
 ALIGN_LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
+# 業種○スタイル
+TRADE_CIRCLE_FONT = Font(bold=True, color="4CAF50", size=10)
+
 # ステータス別スタイル
 STYLE_UNDER_REVIEW = {"fill": PatternFill("solid", fgColor="FFF2CC")}
 STYLE_EXPIRED = {"font": Font(color="FF0000", size=10)}
 STYLE_EXPIRING_90 = {"font": Font(color="E65100", size=10)}
 STYLE_VALID = {}
-STYLE_DOC_INCOMPLETE = {"fill": PatternFill("solid", fgColor="FFCCCC")}
+STYLE_DOC_INCOMPLETE = {}
 STYLE_NOT_SUBMITTED = {"font": Font(color="999999", size=10)}
 STYLE_UNIDENTIFIED = {"font": Font(color="999999", size=10)}
 
+# 書類ステータス用スタイル
+FONT_DOC_COMPLETE = Font(bold=True, color="4CAF50", size=10)   # 9/9: 緑文字太字
+FONT_DOC_INCOMPLETE = Font(color="E65100", size=10)             # 1-8/9: オレンジ文字
+
 FONT_DEFAULT = Font(size=10)
+
+
+# ---------------------------------------------------------------------------
+# 業種マッチング
+# ---------------------------------------------------------------------------
+def match_trades(trade_names: list[str]) -> list[str]:
+    """
+    permit_tradesのtrade_name一覧から29業種の○/空欄リストを返す。
+    部分一致で判定: TRADE_MATCH_KEYSのキーワードがtrade_nameに含まれれば○。
+    """
+    result: list[str] = [""] * 29
+    for trade_name in trade_names:
+        for idx, key in enumerate(TRADE_MATCH_KEYS):
+            if key in trade_name:
+                result[idx] = "○"
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +286,18 @@ def load_companies_with_permits_page(conn: sqlite3.Connection) -> set[str]:
     return {r["company_id"] for r in rows}
 
 
+def load_company_docs(conn: sqlite3.Connection) -> dict[str, set[str]]:
+    """company_id → {doc_type_name, ...}"""
+    rows = conn.execute(
+        "SELECT DISTINCT company_id, doc_type_name FROM pages "
+        "WHERE company_id IS NOT NULL AND doc_type_name IS NOT NULL AND doc_type_name != ''"
+    ).fetchall()
+    result: dict[str, set[str]] = {}
+    for r in rows:
+        result.setdefault(r["company_id"], set()).add(r["doc_type_name"])
+    return result
+
+
 # ---------------------------------------------------------------------------
 # originals/ ディレクトリ名からフォルダパスを取得
 # ---------------------------------------------------------------------------
@@ -317,9 +400,6 @@ def determine_status(
     if company_id in under_review_cids:
         if permit is None:
             return "更新申請中"
-        # permit があっても申請中の会社は申請中ステータス（permitの状態に関わらず）
-        # → ただし、permitsが複数ある場合は期限切れpermitもありうるので、
-        #   permit単位で判定する方が良い。申請中は会社レベルで付与する。
 
     # permit がある場合
     if permit is not None:
@@ -369,14 +449,44 @@ def write_excel(
     companies_with_receipts: set[str],
     companies_with_permit_page: set[str],
     originals_paths: dict[str, str],
+    company_docs: dict[str, set[str]],
 ) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "継続取引業者リスト"
 
-    # --- ヘッダ行 (Row 1) ---
+    # --- Row 1: 凡例行 ---
+    # A1: ステータス色分け凡例
+    status_legend = (
+        "【凡例】 "
+        "■有効  "
+        "■更新申請中(黄背景)  "
+        "■期限切れ(赤文字)  "
+        "■期限90日以内(オレンジ文字)  "
+        "■書類不備  "
+        "■未提出(グレー文字)  "
+        "■未特定(グレー文字)  "
+        "■9/9提出(緑)  "
+        "■不足あり(オレンジ)"
+    )
+    ws.cell(row=1, column=1, value=status_legend).font = Font(size=9, color="333333", bold=True)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
+
+    # J1:AL1: 業種略称凡例
+    legend_parts = [f"{abbr}={name}" for abbr, name in TRADE_29]
+    legend_text = "  ".join(legend_parts)
+    legend_cell = ws.cell(row=1, column=TRADE_COL_START, value=legend_text)
+    legend_cell.font = Font(size=8, color="333333")
+    legend_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
+    ws.merge_cells(
+        start_row=1, start_column=TRADE_COL_START,
+        end_row=1, end_column=TRADE_COL_END,
+    )
+
+    # --- Row 2: ヘッダ行 ---
+    header_row = 2
     for col_idx, header in enumerate(HEADERS, 1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell = ws.cell(row=header_row, column=col_idx, value=header)
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
         cell.alignment = HEADER_ALIGN
@@ -395,8 +505,8 @@ def write_excel(
 
     sorted_list = sorted(matched_list, key=sort_key)
 
-    # --- データ行 ---
-    row_idx = 2
+    # --- データ行 (Row 3~) ---
+    row_idx = header_row + 1  # 3
     for entry in sorted_list:
         cid = entry.get("company_id")
 
@@ -424,37 +534,41 @@ def write_excel(
         permits = permits_by_company.get(cid, []) if cid else []
         has_permit_page = cid in companies_with_permit_page if cid else False
 
+        # 書類充足情報 (1行目のみ表示)
+        ALL_DOCS = [
+            "取引申請書", "建設業許可証", "決算書", "会社案内", "工事経歴書",
+            "取引先一覧表", "労働安全衛生誓約書", "資格略字一覧", "労働者名簿",
+        ]
+        docs = company_docs.get(cid, set()) if cid else set()
+        has_count = sum(1 for dt in ALL_DOCS if dt in docs)
+        doc_status = f"{has_count}/9提出" if cid and has_count > 0 else ""
+        missing: list[str] = []
+        for dt in ALL_DOCS:
+            if dt not in docs:
+                missing.append(f"{dt}（任意）" if dt == "会社案内" else dt)
+        missing_text = "、".join(missing) if missing and cid and has_count > 0 else ""
+
         if not permits:
             # 許可情報なしの行（1行出力）
             status = determine_status(
                 cid, None, under_review_cids,
                 companies_with_receipts, has_permit_page,
             )
-            row_data: list[Any] = [
-                display_name,   # A: 会社名
-                "",             # B: 代表敬称
-                "",             # C: 代表者名
-                "",             # D: 担当者名
-                email_display,  # E: 連絡先
-                "",             # F: 般/特
-                "",             # G: 年
-                "",             # H: 番号
-                "",             # I: 許可区分
-                "",             # J: 許可業種
-                "",             # K: 許可満了日
-                "",             # L: 更新確認日
-                receipt_date,   # M: 許可証受領日
-                folder_path,    # N: フォルダパス
-                status,         # O: ステータス
-                "",             # P: 発注実績
-            ]
+            trade_cols = [""] * 29
+            row_data: list[Any] = (
+                [display_name, "", "", "", email_display,  # A-E
+                 "", "", "", ""]                            # F-I
+                + trade_cols                                # J-AL
+                + ["", "", receipt_date, folder_path,       # AM-AP
+                   status, doc_status, missing_text, ""]    # AQ-AT
+            )
             _write_row(ws, row_idx, row_data, status)
             row_idx += 1
         else:
             # 許可情報ありの行（permit毎に1行）
             for i, permit in enumerate(permits):
                 trades = permit_trades.get(permit["permit_id"], [])
-                trades_str = "・".join(trades)
+                trade_cols = match_trades(trades)
                 expiry_wareki = iso_to_wareki(permit.get("expiry_date"))
 
                 status = determine_status(
@@ -463,60 +577,46 @@ def write_excel(
                 )
 
                 if i == 0:
-                    # 1行目: A-E列を表示
-                    row_data = [
-                        display_name,                       # A
-                        "",                                 # B
-                        "",                                 # C
-                        "",                                 # D
-                        email_display,                      # E
-                        permit.get("permit_category", ""),  # F
-                        permit.get("permit_year", ""),      # G
-                        permit.get("permit_number", ""),    # H
-                        permit.get("permit_authority", ""), # I
-                        trades_str,                         # J
-                        expiry_wareki,                      # K
-                        "",                                 # L
-                        receipt_date,                       # M
-                        folder_path,                        # N
-                        status,                             # O
-                        "",                                 # P
-                    ]
+                    # 1行目: A-E列 + 書類ステータスを表示
+                    row_data = (
+                        [display_name, "", "", "", email_display,  # A-E
+                         permit.get("permit_category", ""),        # F
+                         permit.get("permit_year", ""),             # G
+                         permit.get("permit_number", ""),           # H
+                         permit.get("permit_authority", "")]        # I
+                        + trade_cols                                # J-AL
+                        + [expiry_wareki, "", receipt_date,         # AM-AO
+                           folder_path, status,                     # AP-AQ
+                           doc_status, missing_text, ""]            # AR-AT
+                    )
                 else:
-                    # 2行目以降: A-E列は空
-                    row_data = [
-                        "",                                 # A
-                        "",                                 # B
-                        "",                                 # C
-                        "",                                 # D
-                        "",                                 # E
-                        permit.get("permit_category", ""),  # F
-                        permit.get("permit_year", ""),      # G
-                        permit.get("permit_number", ""),    # H
-                        permit.get("permit_authority", ""), # I
-                        trades_str,                         # J
-                        expiry_wareki,                      # K
-                        "",                                 # L
-                        "",                                 # M
-                        "",                                 # N
-                        status,                             # O
-                        "",                                 # P
-                    ]
+                    # 2行目以降: A-E列・書類ステータスは空
+                    row_data = (
+                        ["", "", "", "", "",                        # A-E
+                         permit.get("permit_category", ""),        # F
+                         permit.get("permit_year", ""),             # G
+                         permit.get("permit_number", ""),           # H
+                         permit.get("permit_authority", "")]        # I
+                        + trade_cols                                # J-AL
+                        + [expiry_wareki, "", "",                   # AM-AO
+                           "", status, "", "", ""]                  # AP-AT
+                    )
 
                 _write_row(ws, row_idx, row_data, status)
                 row_idx += 1
 
     # --- freeze + filter ---
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = "A3"  # Row 1=凡例, Row 2=ヘッダ → Row 3以降スクロール
     last_row = row_idx - 1
-    if last_row >= 2:
-        ws.auto_filter.ref = f"A1:P{last_row}"
+    last_col_letter = get_column_letter(len(HEADERS))
+    if last_row >= header_row + 1:
+        ws.auto_filter.ref = f"A{header_row}:{last_col_letter}{last_row}"
 
     # --- 保存 ---
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(OUTPUT_PATH))
 
-    return last_row - 1  # data row count
+    return last_row - header_row  # data row count
 
 
 def _write_row(
@@ -544,9 +644,27 @@ def _write_row(
         cell.font = FONT_DEFAULT
         cell.alignment = ALIGN_LEFT
 
-        # 中央揃え列: F, G, H, I, K, L, M, O, P
-        if col_idx in (6, 7, 8, 9, 11, 12, 13, 15, 16):
+        # 中央揃え列
+        if col_idx in CENTER_COLS:
             cell.alignment = ALIGN_CENTER
+
+        # 業種列の○スタイル (緑太字)
+        if TRADE_COL_START <= col_idx <= TRADE_COL_END and val == "○":
+            cell.font = TRADE_CIRCLE_FONT
+            # ステータス別fillがある場合はそちらを優先適用
+            if "fill" in style:
+                cell.fill = style["fill"]
+            continue  # fontはTRADE_CIRCLE_FONTを維持
+
+        # 書類ステータス列の色分け (ステータス別fillより優先)
+        if col_idx == COL_DOC_STATUS and val:
+            if str(val).startswith("9/9"):
+                cell.font = FONT_DOC_COMPLETE
+            else:
+                cell.font = FONT_DOC_INCOMPLETE
+            if "fill" in style:
+                cell.fill = style["fill"]
+            continue
 
         # ステータス別スタイル適用
         if "fill" in style:
@@ -574,6 +692,7 @@ def main() -> None:
     receipt_dates = load_receipt_dates(conn)
     companies_with_receipts = load_companies_with_receipts(conn)
     companies_with_permit_page = load_companies_with_permits_page(conn)
+    company_docs = load_company_docs(conn)
     conn.close()
 
     # --- originals/ディレクトリ ---
@@ -607,6 +726,7 @@ def main() -> None:
         companies_with_receipts,
         companies_with_permit_page,
         originals_paths,
+        company_docs,
     )
 
     output_uri = str(OUTPUT_PATH).replace("\\", "/")

@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+/* ===== CSS Variables ===== */
+:root {
+  --ok: #1f7a3e;
+  --ok-bg: #e6f4ea;
+  --warn: #a86500;
+  --warn-bg: #fef7e0;
+  --danger: #b42318;
+  --danger-bg: #fce8e6;
+  --info: #4b5563;
+  --info-bg: #f3f4f6;
+  --primary: #1a73e8;
+  --primary-bg: #e8f0fe;
+  --bg: #f8f9fa;
+  --card-bg: #ffffff;
+  --border: #dadce0;
+  --text: #202124;
+  --text-secondary: #5f6368;
+  --andon-bg: #fff3cd;
+  --andon-border: #ffc107;
+}
+
+/* ===== Base ===== */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ===== Header ===== */
+.header {
+  background: var(--primary);
+  color: white;
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.header h1 { font-size: 18px; font-weight: 600; }
+.header-nav { display: flex; gap: 12px; }
+.header-nav button {
+  background: rgba(255,255,255,0.15);
+  color: white;
+  border: none;
+  padding: 6px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.header-nav button:hover { background: rgba(255,255,255,0.3); }
+.header-nav button.active { background: rgba(255,255,255,0.4); }
+
+/* ===== Status Cards ===== */
+.cards { display: flex; gap: 12px; padding: 16px 24px; flex-wrap: wrap; }
+.card {
+  flex: 1;
+  min-width: 120px;
+  background: var(--card-bg);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.card-value { font-size: 28px; font-weight: 700; }
+.card-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.card-expired .card-value { color: var(--danger); }
+.card-warn .card-value { color: var(--warn); }
+.card-ok .card-value { color: var(--ok); }
+
+/* ===== Andon Bar ===== */
+.andon {
+  background: var(--andon-bg);
+  border: 1px solid var(--andon-border);
+  margin: 0 24px;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  display: none;
+}
+.andon.visible { display: block; }
+
+/* ===== Search / Filter ===== */
+.toolbar {
+  padding: 12px 24px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.toolbar input {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+  width: 260px;
+}
+.toolbar select {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+}
+.toolbar button {
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+.btn-primary {
+  background: var(--primary) !important;
+  color: white !important;
+  border-color: var(--primary) !important;
+}
+
+/* ===== Table ===== */
+.table-wrap { padding: 0 24px 24px; overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: var(--card-bg); border-radius: 8px; overflow: hidden; }
+th {
+  background: var(--primary-bg);
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 12px;
+  text-align: left;
+  padding: 10px 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+th:hover { background: #d2e3fc; }
+td { padding: 10px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+tr:hover { background: #f1f3f4; }
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.status-expired { background: var(--danger-bg); color: var(--danger); }
+.status-danger { background: var(--danger-bg); color: var(--danger); }
+.status-warn { background: var(--warn-bg); color: var(--warn); }
+.status-ok { background: var(--ok-bg); color: var(--ok); }
+.status-unknown { background: var(--info-bg); color: var(--info); }
+.btn-detail {
+  padding: 4px 12px;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* ===== Detail Screen ===== */
+.screen { display: none; }
+.screen.active { display: block; }
+.detail-wrap { padding: 24px; max-width: 800px; }
+.detail-section {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.detail-section h3 { font-size: 14px; color: var(--primary); margin-bottom: 12px; border-bottom: 2px solid var(--primary-bg); padding-bottom: 8px; }
+.detail-row { display: flex; padding: 6px 0; border-bottom: 1px solid #f1f3f4; }
+.detail-label { width: 140px; color: var(--text-secondary); font-size: 13px; flex-shrink: 0; }
+.detail-value { font-size: 13px; }
+.btn-back {
+  background: none;
+  border: none;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+  margin-bottom: 16px;
+}
+.action-buttons { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.btn-action {
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  background: white;
+}
+.btn-danger { border-color: var(--danger); color: var(--danger); }
+.btn-success { border-color: var(--ok); color: var(--ok); }
+
+/* ===== Form ===== */
+.form-wrap { padding: 24px; max-width: 600px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; }
+.form-group input, .form-group select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+}
+.form-actions { display: flex; gap: 12px; margin-top: 24px; }
+
+/* ===== Admin ===== */
+.admin-wrap { padding: 24px; }
+.admin-section {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.admin-section h3 { font-size: 14px; color: var(--primary); margin-bottom: 12px; }
+.log-table { width: 100%; font-size: 12px; }
+.log-table td { padding: 6px 8px; }
+
+/* ===== Loading ===== */
+.loading {
+  text-align: center;
+  padding: 48px;
+  color: var(--text-secondary);
+}
+.loading::after {
+  content: '';
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== Toast ===== */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 12px 24px;
+  border-radius: 8px;
+  color: white;
+  font-size: 14px;
+  z-index: 1000;
+  display: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.toast.success { background: var(--ok); }
+.toast.error { background: var(--danger); }
+.toast.visible { display: block; }
+
+/* ===== Responsive ===== */
+@media (max-width: 768px) {
+  .cards { flex-direction: column; }
+  .card { min-width: auto; }
+  .toolbar { flex-direction: column; }
+  .toolbar input { width: 100%; }
+  .header { flex-direction: column; gap: 8px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== Header ===== -->
+<div class="header">
+  <h1>建設業許可管理システム</h1>
+  <div class="header-nav">
+    <button onclick="showScreen('dashboard')" class="active" id="nav-dashboard">ダッシュボード</button>
+    <button onclick="showScreen('add')" id="nav-add">会社追加</button>
+    <button onclick="showScreen('admin')" id="nav-admin">運用管理</button>
+  </div>
+</div>
+
+<!-- ===== Screen: Dashboard ===== -->
+<div class="screen active" id="screen-dashboard">
+  <div class="cards" id="status-cards"></div>
+  <div class="andon" id="andon-bar"></div>
+  <div class="toolbar">
+    <input type="text" id="search-input" placeholder="会社名で検索..." oninput="filterTable()">
+    <select id="status-filter" onchange="filterTable()">
+      <option value="all">全て</option>
+      <option value="expired">期限切れ</option>
+      <option value="danger">30日以内</option>
+      <option value="warn">90日以内</option>
+      <option value="ok">有効</option>
+    </select>
+    <button class="btn-primary" onclick="loadDashboard()">更新</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th onclick="sortTable('company_name')">会社名</th>
+          <th onclick="sortTable('permit_number')">許可番号</th>
+          <th onclick="sortTable('category')">般/特</th>
+          <th onclick="sortTable('trades_count')">業種数</th>
+          <th onclick="sortTable('expiry_date')">有効期限</th>
+          <th onclick="sortTable('days_remaining')">残日数</th>
+          <th>状態</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="permit-table"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== Screen: Detail ===== -->
+<div class="screen" id="screen-detail">
+  <div class="detail-wrap" id="detail-content">
+    <div class="loading">読み込み中</div>
+  </div>
+</div>
+
+<!-- ===== Screen: Add Company ===== -->
+<div class="screen" id="screen-add">
+  <div class="form-wrap">
+    <button class="btn-back" onclick="showScreen('dashboard')">← ダッシュボードに戻る</button>
+    <h2 style="margin-bottom:20px;">新規会社登録</h2>
+    <div class="form-group">
+      <label>会社名 *</label>
+      <input type="text" id="add-name" placeholder="例: 株式会社〇〇">
+    </div>
+    <div class="form-group">
+      <label>連絡先メール *</label>
+      <input type="email" id="add-email" placeholder="例: info@example.co.jp">
+    </div>
+    <div class="form-group">
+      <label>担当者名</label>
+      <input type="text" id="add-contact" placeholder="例: 山田太郎">
+    </div>
+    <div class="form-actions">
+      <button class="btn-primary" onclick="submitAddCompany()">登録</button>
+      <button class="btn-action" onclick="showScreen('dashboard')">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Screen: Admin ===== -->
+<div class="screen" id="screen-admin">
+  <div class="admin-wrap">
+    <button class="btn-back" onclick="showScreen('dashboard')">← ダッシュボードに戻る</button>
+    <h2 style="margin-bottom:20px;">運用管理</h2>
+
+    <div class="admin-section">
+      <h3>データ同期</h3>
+      <div id="sync-status">読み込み中...</div>
+    </div>
+
+    <div class="admin-section">
+      <h3>通知履歴（直近20件）</h3>
+      <div id="notif-history">読み込み中...</div>
+    </div>
+
+    <div class="admin-section">
+      <h3>監査ログ（直近20件）</h3>
+      <div id="audit-log">読み込み中...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Toast ===== -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ===== State =====
+var state = {
+  screen: 'dashboard',
+  rows: [],
+  filteredRows: [],
+  sortKey: 'days_remaining',
+  sortAsc: true
+};
+
+// ===== XSS Prevention =====
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(String(s)));
+  return div.innerHTML;
+}
+
+// ===== API Wrapper =====
+function callApi(fn, args) {
+  args = args || [];
+  return new Promise(function(resolve, reject) {
+    var runner = google.script.run.withSuccessHandler(function(res) {
+      if (res && res._error) reject(new Error(res.message));
+      else resolve(res);
+    }).withFailureHandler(reject);
+    runner[fn].apply(runner, args);
+  });
+}
+
+// ===== Screen Routing =====
+function showScreen(name) {
+  state.screen = name;
+  document.querySelectorAll('.screen').forEach(function(el) { el.classList.remove('active'); });
+  document.getElementById('screen-' + name).classList.add('active');
+  document.querySelectorAll('.header-nav button').forEach(function(b) { b.classList.remove('active'); });
+  var navBtn = document.getElementById('nav-' + name);
+  if (navBtn) navBtn.classList.add('active');
+
+  if (name === 'dashboard') loadDashboard();
+  if (name === 'admin') loadAdmin();
+}
+
+// ===== Toast =====
+function showToast(msg, type) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + (type || 'success') + ' visible';
+  setTimeout(function() { t.classList.remove('visible'); }, 3000);
+}
+
+// ===== Dashboard =====
+function loadDashboard() {
+  document.getElementById('permit-table').innerHTML = '<tr><td colspan="8" class="loading">読み込み中</td></tr>';
+  callApi('apiGetDashboard').then(function(data) {
+    state.rows = data.rows || [];
+    renderCards(data.counts);
+    renderAndon(data.andon);
+    filterTable();
+  }).catch(function(err) {
+    showToast('データ取得エラー: ' + err.message, 'error');
+  });
+}
+
+function renderCards(counts) {
+  var html =
+    '<div class="card card-expired" onclick="setFilter(\'expired\')"><div class="card-value">' + (counts.expired || 0) + '</div><div class="card-label">期限切れ</div></div>' +
+    '<div class="card card-warn" onclick="setFilter(\'danger\')"><div class="card-value">' + ((counts.danger || 0) + (counts.warn || 0)) + '</div><div class="card-label">90日以内</div></div>' +
+    '<div class="card card-ok" onclick="setFilter(\'ok\')"><div class="card-value">' + (counts.ok || 0) + '</div><div class="card-label">有効</div></div>' +
+    '<div class="card" onclick="setFilter(\'all\')"><div class="card-value">' + (counts.total || 0) + '</div><div class="card-label">全件</div></div>';
+  document.getElementById('status-cards').innerHTML = html;
+}
+
+function renderAndon(andon) {
+  var bar = document.getElementById('andon-bar');
+  var msgs = [];
+  if (andon.scrapeFail > 0) msgs.push('スクレイプ失敗 ' + andon.scrapeFail + '件');
+  if (andon.needsReview > 0) msgs.push('要確認 ' + andon.needsReview + '件');
+  if (msgs.length > 0) {
+    bar.innerHTML = '⚠ ' + msgs.join(' / ');
+    bar.classList.add('visible');
+  } else {
+    bar.classList.remove('visible');
+  }
+}
+
+function setFilter(val) {
+  document.getElementById('status-filter').value = val;
+  filterTable();
+}
+
+function filterTable() {
+  var search = document.getElementById('search-input').value.toLowerCase();
+  var statusFilter = document.getElementById('status-filter').value;
+
+  state.filteredRows = state.rows.filter(function(r) {
+    var matchSearch = !search || (r.company_name || '').toLowerCase().indexOf(search) >= 0;
+    var matchStatus = statusFilter === 'all' || r.status === statusFilter ||
+      (statusFilter === 'danger' && (r.status === 'danger' || r.status === 'warn'));
+    return matchSearch && matchStatus;
+  });
+
+  renderTable();
+}
+
+function sortTable(key) {
+  if (state.sortKey === key) state.sortAsc = !state.sortAsc;
+  else { state.sortKey = key; state.sortAsc = true; }
+  state.filteredRows.sort(function(a, b) {
+    var va = a[key], vb = b[key];
+    if (typeof va === 'number' && typeof vb === 'number') return state.sortAsc ? va - vb : vb - va;
+    return state.sortAsc ? String(va||'').localeCompare(String(vb||'')) : String(vb||'').localeCompare(String(va||''));
+  });
+  renderTable();
+}
+
+function renderTable() {
+  var html = '';
+  state.filteredRows.forEach(function(r) {
+    var statusClass = 'status-' + r.status;
+    var statusLabel = r.status === 'expired' ? '期限切れ' :
+                      r.status === 'danger' ? '30日以内' :
+                      r.status === 'warn' ? '90日以内' :
+                      r.status === 'ok' ? '有効' : '不明';
+    var days = r.days_remaining !== null ? r.days_remaining : '-';
+    html += '<tr>' +
+      '<td>' + esc(r.company_name) + '</td>' +
+      '<td>' + esc(r.permit_number) + '</td>' +
+      '<td style="text-align:center">' + esc(r.category) + '</td>' +
+      '<td style="text-align:center">' + esc(r.trades_count) + '</td>' +
+      '<td>' + esc(r.expiry_date) + '</td>' +
+      '<td style="text-align:right;font-weight:600">' + esc(days) + '</td>' +
+      '<td><span class="status-badge ' + statusClass + '">' + esc(statusLabel) + '</span></td>' +
+      '<td><button class="btn-detail" onclick="showDetail(\'' + esc(r.company_id) + '\')">詳細</button></td>' +
+      '</tr>';
+  });
+  if (!html) html = '<tr><td colspan="8" style="text-align:center;padding:24px;color:#999">該当データなし</td></tr>';
+  document.getElementById('permit-table').innerHTML = html;
+}
+
+// ===== Detail =====
+function showDetail(companyId) {
+  showScreen('detail');
+  document.getElementById('detail-content').innerHTML = '<div class="loading">読み込み中</div>';
+  callApi('apiGetCompany', [companyId]).then(function(data) {
+    renderDetail(data);
+  }).catch(function(err) {
+    document.getElementById('detail-content').innerHTML = '<p style="color:red">エラー: ' + err.message + '</p>';
+  });
+}
+
+function renderDetail(data) {
+  var c = data.company || {};
+  var permits = data.permits || [];
+  var notifs = data.notifications || [];
+  var logs = data.auditLog || [];
+  var isActive = (c.status || 'ACTIVE') !== 'INACTIVE';
+
+  var html = '<button class="btn-back" onclick="showScreen(\'dashboard\')">← ダッシュボードに戻る</button>';
+
+  // Company info
+  var displayName = esc(c.company_name_raw || c.company_name_normalized || c.company_id || '');
+  var cid = esc(c.company_id || '');
+  html += '<div class="detail-section"><h3>基本情報</h3>';
+  html += '<div class="detail-row"><div class="detail-label">会社名</div><div class="detail-value">' + displayName + '</div></div>';
+  html += '<div class="detail-row"><div class="detail-label">連絡先</div><div class="detail-value">' + esc(c.contact_email || '未設定') + '</div></div>';
+  html += '<div class="detail-row"><div class="detail-label">ステータス</div><div class="detail-value">' + esc(c.status || 'ACTIVE') + '</div></div>';
+  html += '<div class="action-buttons">';
+  if (isActive) {
+    html += '<button class="btn-action btn-danger" onclick="deactivateCompany(\'' + cid + '\')">無効化</button>';
+  } else {
+    html += '<button class="btn-action btn-success" onclick="reactivateCompany(\'' + cid + '\')">再有効化</button>';
+  }
+  html += '</div></div>';
+
+  // Permits
+  html += '<div class="detail-section"><h3>許可情報</h3>';
+  if (permits.length === 0) {
+    html += '<p style="color:#999">許可情報なし</p>';
+  } else {
+    permits.forEach(function(p) {
+      var days = p.days_remaining !== '' ? Number(p.days_remaining) : null;
+      var status = days !== null ? (days < 0 ? 'expired' : days <= 30 ? 'danger' : days <= 90 ? 'warn' : 'ok') : 'unknown';
+      var statusClass = 'status-' + status;
+      html += '<div style="padding:8px 0;border-bottom:1px solid #f1f3f4">';
+      html += '<div class="detail-row"><div class="detail-label">許可番号</div><div class="detail-value">' + esc(p.authority) + ' (' + esc(p.category) + ') 第' + esc(p.permit_number) + '号</div></div>';
+      html += '<div class="detail-row"><div class="detail-label">有効期限</div><div class="detail-value">' + esc(p.expiry_date) + ' <span class="status-badge ' + statusClass + '">残' + esc(days !== null ? days : '?') + '日</span></div></div>';
+      var trades = [];
+      if (p.trades_ippan) trades.push('般: ' + esc(p.trades_ippan.replace(/\|/g, ', ')));
+      if (p.trades_tokutei) trades.push('特: ' + esc(p.trades_tokutei.replace(/\|/g, ', ')));
+      html += '<div class="detail-row"><div class="detail-label">業種</div><div class="detail-value">' + (trades.join('<br>') || 'なし') + '</div></div>';
+      html += '</div>';
+    });
+  }
+  html += '<div class="action-buttons" style="margin-top:12px">';
+  html += '<button class="btn-primary" onclick="sendNotification(\'' + cid + '\')">今すぐ通知送信</button>';
+  html += '</div></div>';
+
+  // Notification history
+  html += '<div class="detail-section"><h3>通知履歴</h3>';
+  if (notifs.length === 0) {
+    html += '<p style="color:#999">通知履歴なし</p>';
+  } else {
+    html += '<table class="log-table"><tr><th>日時</th><th>ステージ</th><th>宛先</th><th>結果</th></tr>';
+    notifs.forEach(function(n) {
+      html += '<tr><td>' + esc(n.sent_at) + '</td><td>' + esc(n.stage) + '</td><td>' + esc(n.to_email) + '</td><td>' + esc(n.result) + '</td></tr>';
+    });
+    html += '</table>';
+  }
+  html += '</div>';
+
+  // Audit log
+  html += '<div class="detail-section"><h3>操作ログ</h3>';
+  if (logs.length === 0) {
+    html += '<p style="color:#999">操作ログなし</p>';
+  } else {
+    html += '<table class="log-table"><tr><th>日時</th><th>操作者</th><th>操作</th><th>詳細</th></tr>';
+    logs.forEach(function(l) {
+      html += '<tr><td>' + esc(l.timestamp) + '</td><td>' + esc(l.user_email) + '</td><td>' + esc(l.action) + '</td><td>' + esc(String(l.details||'').substring(0,60)) + '</td></tr>';
+    });
+    html += '</table>';
+  }
+  html += '</div>';
+
+  document.getElementById('detail-content').innerHTML = html;
+}
+
+// ===== Actions =====
+function deactivateCompany(companyId) {
+  if (!confirm('この会社を無効化しますか？')) return;
+  callApi('apiDeactivateCompany', [companyId]).then(function() {
+    showToast('無効化しました');
+    showDetail(companyId);
+  }).catch(function(err) { showToast(err.message, 'error'); });
+}
+
+function reactivateCompany(companyId) {
+  callApi('apiReactivateCompany', [companyId]).then(function() {
+    showToast('再有効化しました');
+    showDetail(companyId);
+  }).catch(function(err) { showToast(err.message, 'error'); });
+}
+
+function sendNotification(companyId) {
+  if (!confirm('この会社に通知メールを送信しますか？')) return;
+  callApi('apiSendNotification', [companyId, null]).then(function(res) {
+    if (res.dryRun) showToast('ドライラン: ' + res.message, 'error');
+    else showToast('通知送信完了: ' + res.sentTo);
+    showDetail(companyId);
+  }).catch(function(err) { showToast(err.message, 'error'); });
+}
+
+function submitAddCompany() {
+  var name = document.getElementById('add-name').value.trim();
+  var email = document.getElementById('add-email').value.trim();
+  var contact = document.getElementById('add-contact').value.trim();
+  if (!name) { showToast('会社名を入力してください', 'error'); return; }
+  if (!email) { showToast('メールアドレスを入力してください', 'error'); return; }
+
+  callApi('apiAddCompany', [{ company_name: name, contact_email: email, contact_person: contact }])
+    .then(function(res) {
+      showToast('登録完了: ' + res.company_id);
+      document.getElementById('add-name').value = '';
+      document.getElementById('add-email').value = '';
+      document.getElementById('add-contact').value = '';
+      showScreen('dashboard');
+    }).catch(function(err) { showToast(err.message, 'error'); });
+}
+
+// ===== Admin =====
+function loadAdmin() {
+  // Sync status
+  callApi('apiGetSyncStatus').then(function(s) {
+    if (!s || !s.sync_at) {
+      document.getElementById('sync-status').innerHTML = '同期履歴なし';
+      return;
+    }
+    document.getElementById('sync-status').innerHTML =
+      '最終同期: ' + esc(s.sync_at) + '<br>' +
+      '件数: ' + esc(s.records_synced) + '件 (OK=' + esc(s.records_ok) + ', FAIL=' + esc(s.records_failed) + ')';
+  });
+
+  // Notifications
+  callApi('apiGetNotifications', [20]).then(function(notifs) {
+    if (!notifs || notifs.length === 0) {
+      document.getElementById('notif-history').innerHTML = '<p style="color:#999">通知履歴なし</p>';
+      return;
+    }
+    var html = '<table class="log-table"><tr><th>日時</th><th>会社</th><th>ステージ</th><th>宛先</th><th>結果</th></tr>';
+    notifs.forEach(function(n) {
+      html += '<tr><td>' + esc(n.sent_at) + '</td><td>' + esc(n.company_id) + '</td><td>' + esc(n.stage) + '</td><td>' + esc(n.to_email) + '</td><td>' + esc(n.result) + '</td></tr>';
+    });
+    html += '</table>';
+    document.getElementById('notif-history').innerHTML = html;
+  });
+
+  // Audit log
+  callApi('apiGetAuditLog', [20]).then(function(logs) {
+    if (!logs || logs.length === 0) {
+      document.getElementById('audit-log').innerHTML = '<p style="color:#999">監査ログなし</p>';
+      return;
+    }
+    var html = '<table class="log-table"><tr><th>日時</th><th>操作者</th><th>操作</th><th>対象</th><th>詳細</th></tr>';
+    logs.forEach(function(l) {
+      html += '<tr><td>' + esc(l.timestamp) + '</td><td>' + esc((l.user_email||'').split('@')[0]) + '</td><td>' + esc(l.action) + '</td><td>' + esc(l.target_id) + '</td><td>' + esc(String(l.details||'').substring(0,40)) + '</td></tr>';
+    });
+    html += '</table>';
+    document.getElementById('audit-log').innerHTML = html;
+  });
+}
+
+// ===== Init =====
+document.addEventListener('DOMContentLoaded', function() {
+  loadDashboard();
+});
+</script>
+
+</body>
+</html>
