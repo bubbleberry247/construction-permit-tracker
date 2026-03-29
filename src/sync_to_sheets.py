@@ -140,12 +140,20 @@ def sync_permits(
         ws = sh.add_worksheet(title="MLITPermits", rows=200, cols=len(PERMITS_HEADERS))
         print(f"  Created new MLITPermits sheet")
 
-    # Full replace: clear + write header + data
-    ws.clear()
+    # Full replace: write first, then clear old rows (safer than clear→write)
     all_values = [PERMITS_HEADERS] + data_rows
-    ws.update(range_name="A1", values=all_values)
-
-    print(f"  Written {len(data_rows)} rows to MLITPermits")
+    try:
+        ws.update(range_name="A1", values=all_values)
+        # Clear any leftover rows beyond new data
+        total_rows = ws.row_count
+        new_rows = len(all_values)
+        if total_rows > new_rows:
+            ws.batch_clear([f"A{new_rows + 1}:Z{total_rows}"])
+        print(f"  Written {len(data_rows)} rows to MLITPermits")
+    except Exception as e:
+        print(f"  [ERROR] Write failed: {e}")
+        print(f"  [SAFE] Existing data preserved (overwrite failed, not cleared)")
+        raise
 
     # Read back for verification
     actual = ws.get_all_values()

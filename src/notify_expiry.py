@@ -1,10 +1,14 @@
 """
-notify_expiry.py — 建設業許可の期限150日前に1回メール通知する。
+notify_expiry.py — 建設業許可の期限通知（開発・テスト用）
+
+NOTE: 本番通知は GAS Mailer.gs (毎朝8時トリガー) が担当。
+      このスクリプトはテスト・手動確認用として残す。
+      GAS と二重送信しないよう、本番では --dry-run で使用すること。
 
 Usage:
-    python src/notify_expiry.py              # 本番（メール送信）
-    python src/notify_expiry.py --dry-run    # 対象一覧のみ（送信なし）
+    python src/notify_expiry.py --dry-run    # 対象一覧のみ（推奨）
     python src/notify_expiry.py --test-email # 自分宛にテスト送信
+    python src/notify_expiry.py              # 手動送信（GAS無効時のみ）
 """
 
 from __future__ import annotations
