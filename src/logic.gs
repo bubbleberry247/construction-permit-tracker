@@ -35,16 +35,11 @@ function buildDashboardData_() {
   var andon = { scrapeFail: 0, needsReview: 0 };
 
   permits.forEach(function(p) {
-    if (p.fetch_status !== 'OK' && p.fetch_status) {
-      andon.scrapeFail++;
-    }
+    // ホワイトリスト方式: OKのみ表示、それ以外（NOT_FOUND, DUPLICATE_DELETE等）は非表示
+    if (p.fetch_status !== 'OK') return;
 
     var daysRemaining = (p.days_remaining !== '' && p.days_remaining !== 0 && p.days_remaining !== '0')
       ? Number(p.days_remaining) : null;
-    // NOT_FOUND companies: days_remaining=0 but no expiry = unknown
-    if (p.fetch_status !== 'OK' && (daysRemaining === 0 || daysRemaining === null)) {
-      daysRemaining = null;
-    }
     var status = resolvePermitStatus_(daysRemaining);
 
     // Company status check
