@@ -195,6 +195,125 @@ function reactivateCompany_(companyId, userEmail) {
 }
 
 // ---------------------------------------------------------------------------
+// User Access（ユーザー管理）
+// ---------------------------------------------------------------------------
+
+/**
+ * UserAccess にユーザーが存在しなければ作成する（初回ログイン時）
+ * @param {string} email
+ * @param {string} [displayName]
+ * @param {string} [role]
+ * @return {{ email: string, role: string, active: boolean, displayName: string }}
+ */
+function ensureUser_(email, displayName, role) {
+  email = String(email || '').trim().toLowerCase();
+  if (!email) throw new Error('ensureUser_: email is required');
+
+  var existing = getUserAccessByEmail_(email);
+  if (existing) return existing;
+
+  // 新規作成（デフォルト role = 'user'、active = false — 管理者が有効化するまで待機）
+  var now = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
+  appendRecord_(SHEETS.UserAccess, {
+    email: email,
+    role: role || 'user',
+    active: 'false',
+    displayName: displayName || email.split('@')[0],
+    updatedAt: now
+  });
+
+  return {
+    email: email,
+    role: role || 'user',
+    active: false,
+    displayName: displayName || email.split('@')[0]
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Hard Delete
+// ---------------------------------------------------------------------------
+
+/**
+ * 会社を物理削除する（管理者のみ）
+ * アーカイブ → 依存データ削除 → 本体削除
+ * @param {string} companyId
+ * @param {string} userEmail
+ */
+function hardDeleteCompany_(companyId, userEmail) {
+  // LockService で排他制御（30秒タイムアウト）
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    throw new Error('他の削除処理が実行中です。しばらくしてからお試しください。');
+  }
+
+  try {
+    var company = findByKey_(SHEETS.Companies, 'company_id', companyId);
+    if (!company) throw new Error('会社が見つかりません: ' + companyId);
+
+    var companyName = company.company_name_raw || company.company_name_normalized || companyId;
+
+    // スナップショット保存（監査ログにアーカイブ）
+    var snapshot = JSON.stringify({
+      company: company,
+      permits: findAllByKey_(SHEETS.MLITPermits, 'company_id', companyId),
+      notifications: findAllByKey_(SHEETS.Notifications, 'company_id', companyId).slice(0, 10)
+    });
+    writeAuditLog_(userEmail, 'HARD_DELETE_ARCHIVE', 'Company', companyId,
+      'name=' + companyName + ' snapshot_length=' + snapshot.length);
+
+    // 依存データ削除（MLITPermits）
+    var deletedPermits = deleteRowsByKey_(SHEETS.MLITPermits, 'company_id', companyId);
+
+    // 依存データ削除（Notifications）
+    var deletedNotifs = deleteRowsByKey_(SHEETS.Notifications, 'company_id', companyId);
+
+    // 本体削除（Companies）
+    deleteRowsByKey_(SHEETS.Companies, 'company_id', companyId);
+
+    writeAuditLog_(userEmail, 'HARD_DELETE_DONE', 'Company', companyId,
+      'name=' + companyName + ' permits=' + deletedPermits + ' notifs=' + deletedNotifs);
+
+    return {
+      success: true,
+      deleted: { company: companyName, permits: deletedPermits, notifications: deletedNotifs }
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * 指定キーに一致する行を全て物理削除する（下から上に走査）
+ * @param {string} sheetName
+ * @param {string} keyField
+ * @param {string} keyValue
+ * @return {number} 削除した行数
+ */
+function deleteRowsByKey_(sheetName, keyField, keyValue) {
+  var sheet = getSheet_(sheetName);
+  var data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return 0;
+
+  var headers = data[0];
+  var keyIdx = -1;
+  for (var i = 0; i < headers.length; i++) {
+    if (String(headers[i]).trim() === keyField) { keyIdx = i; break; }
+  }
+  if (keyIdx < 0) return 0;
+
+  // 下から上に走査（削除時にインデックスがずれないように）
+  var deleted = 0;
+  for (var r = data.length - 1; r >= 1; r--) {
+    if (String(data[r][keyIdx]).trim() === String(keyValue).trim()) {
+      sheet.deleteRow(r + 1);
+      deleted++;
+    }
+  }
+  return deleted;
+}
+
+// ---------------------------------------------------------------------------
 // Manual Notification
 // ---------------------------------------------------------------------------
 function sendManualNotification_(companyId, permitKey, userEmail) {

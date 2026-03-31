@@ -36,34 +36,96 @@ function getCurrentUserEmail_() {
 }
 
 // ---------------------------------------------------------------------------
-// doGet — Webアプリエントリポイント
+// doGet — Webアプリエントリポイント（OAuth 2.0ルーティング）
 // ---------------------------------------------------------------------------
 function doGet(e) {
-  var email = getCurrentUserEmail_();
+  var params = (e && e.parameter) ? e.parameter : {};
+  var diag    = params.diag    || '';
+  var error   = params.error   || '';
+  var code    = params.code    || '';
+  var state   = params.state   || '';
+  var action  = params.action  || '';
+  var oauthStart  = params.oauthStart  || '';
+  var manualLogin = params.manualLogin || '';
+  var manualKey   = params.key || '';
 
-  // Auth check
-  if (!isAuthorized_(email)) {
-    return HtmlService.createHtmlOutput(
-      '<html><body style="font-family:Meiryo,sans-serif;text-align:center;padding:60px;">' +
-      '<h1>アクセス権限がありません</h1>' +
-      '<p>管理者にお問い合わせください。</p>' +
-      '<p style="color:#999;">Email: ' + email + '</p>' +
-      '</body></html>'
-    ).setTitle('アクセス拒否');
+  // 1. 診断エンドポイント
+  if (diag === 'oauth') {
+    return diagOAuth_();
   }
 
-  // Admin endpoints
-  var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
+  // 2. エラーパラメータ
+  if (error) {
+    return errorPage_('OAuth エラー: ' + error);
+  }
 
+  // 3. OAuthコールバック（code + state）
+  if (code && state) {
+    return handleOAuthCallback_(code, state);
+  }
+
+  // 4. OAuthログイン開始ページ
+  if (oauthStart === '1') {
+    return generateOAuthStartPage_();
+  }
+
+  // 5. 管理者手動ログイン（?manualLogin=email&key=tscg2026）
+  if (manualLogin && manualKey === 'tscg2026') {
+    return handleManualLogin_(manualLogin);
+  }
+
+  // 6. Admin endpoints（後方互換）
   if (action === 'initAuditLog') {
     getSheet_(SHEETS.AuditLog);
-    return ContentService.createTextOutput(JSON.stringify({ok: true}))
+    return ContentService.createTextOutput(JSON.stringify({ ok: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  if (action === 'initUserAccess') {
+    getSheet_(SHEETS.UserAccess);
+    getSheet_(SHEETS.AuthLog);
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, sheets: ['UserAccess', 'AuthLog'] }))
       .setMimeType(ContentService.MimeType.JSON);
   }
 
-  // Default: serve SPA
-  return HtmlService.createHtmlOutputFromFile('index')
-    .setTitle('建設業許可管理システム')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  // 7. Default: AUTH_MODE に応じてサーブ
+  var authMode = getConfig('AUTH_MODE') || 'HYBRID';
+  var hasOAuthConfig = !!getConfig('GOOGLE_CLIENT_ID');
+
+  if (authMode === 'OAUTH_REQUIRED') {
+    if (!hasOAuthConfig) {
+      return errorPage_('設定エラー: OAUTH_REQUIRED ですが GOOGLE_CLIENT_ID が未設定です');
+    }
+    return generateOAuthStartPage_();
+  }
+
+  // HYBRID モード: OAuth未設定時は旧方式のみで動作（後方互換）
+  var email = getCurrentUserEmail_();
+  if (isAuthorized_(email) && email && email !== 'unknown') {
+    // 旧 allowlist で認証OK → GASセッション情報をserverAuthResultとして渡す
+    var sessionAuth = JSON.stringify({
+      email: email,
+      displayName: email.split('@')[0],
+      role: 'user'
+    });
+    return serveIndexWithAuth_(sessionAuth, getAppExecUrl_());
+  }
+
+  // 旧認証NG → OAuth が設定されていればログインページへ
+  if (hasOAuthConfig) {
+    return generateOAuthStartPage_();
+  }
+
+  // OAuth も未設定、allowlist未設定 = fail-open → セッション情報を渡す
+  var fallbackEmail = (email && email !== 'unknown') ? email : '';
+  if (fallbackEmail) {
+    var fallbackAuth = JSON.stringify({
+      email: fallbackEmail,
+      displayName: fallbackEmail.split('@')[0],
+      role: 'user'
+    });
+    return serveIndexWithAuth_(fallbackAuth, getAppExecUrl_());
+  }
+
+  // 完全に未認証 → ログイン画面（OAuth未設定でもログインページは表示）
+  return serveIndexWithAuth_('', getAppExecUrl_());
 }

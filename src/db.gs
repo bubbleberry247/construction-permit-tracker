@@ -12,10 +12,14 @@ var SHEETS = {
   MLITPermits: 'MLITPermits',
   Notifications: 'Notifications',
   AuditLog: 'AuditLog',
-  SyncRuns: 'SyncRuns'
+  SyncRuns: 'SyncRuns',
+  UserAccess: 'UserAccess',
+  AuthLog: 'AuthLog'
 };
 
 var AUDIT_HEADERS = ['log_id', 'timestamp', 'user_email', 'action', 'target_type', 'target_id', 'details'];
+var USERACCESS_HEADERS = ['email', 'role', 'active', 'displayName', 'updatedAt'];
+var AUTHLOG_HEADERS = ['timestamp', 'step', 'detail'];
 
 // ---------------------------------------------------------------------------
 // シート取得
@@ -28,6 +32,12 @@ function getSheet_(name) {
     if (name === SHEETS.AuditLog) {
       sheet.getRange(1, 1, 1, AUDIT_HEADERS.length).setValues([AUDIT_HEADERS]);
       sheet.getRange(1, 1, 1, AUDIT_HEADERS.length).setFontWeight('bold').setBackground('#e8f0fe');
+    } else if (name === SHEETS.UserAccess) {
+      sheet.getRange(1, 1, 1, USERACCESS_HEADERS.length).setValues([USERACCESS_HEADERS]);
+      sheet.getRange(1, 1, 1, USERACCESS_HEADERS.length).setFontWeight('bold').setBackground('#e8f0fe');
+    } else if (name === SHEETS.AuthLog) {
+      sheet.getRange(1, 1, 1, AUTHLOG_HEADERS.length).setValues([AUTHLOG_HEADERS]);
+      sheet.getRange(1, 1, 1, AUTHLOG_HEADERS.length).setFontWeight('bold').setBackground('#e8f0fe');
     }
   }
   return sheet;

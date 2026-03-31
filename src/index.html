@@ -306,6 +306,18 @@ tr:hover { background: #f9fafb; }
   .header { flex-direction: column; gap: 8px; }
   .nav-pills { flex-wrap: wrap; }
 }
+
+/* ===== Trade Tags ===== */
+.trade-tags { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.trade-tag {
+  font-size: 10px; padding: 1px 5px; border-radius: 3px;
+  font-weight: 600; line-height: 1.4; white-space: nowrap;
+}
+.trade-tag-ippan { background: #dbeafe; color: #1d4ed8; }
+.trade-tag-tokutei { background: #fce7f3; color: #be185d; }
+.trade-tag-both { background: #ede9fe; color: #6d28d9; }
+.trade-legend { display: flex; gap: 12px; font-size: 10px; color: var(--text-secondary); align-items: center; margin-top: 4px; }
+.trade-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 </style>
 </head>
 <body>
@@ -317,6 +329,25 @@ tr:hover { background: #f9fafb; }
     <button onclick="showScreen('dashboard')" class="active" id="nav-dashboard">ダッシュボード</button>
     <button onclick="showScreen('add')" id="nav-add">会社追加</button>
     <button onclick="showScreen('admin')" id="nav-admin">運用管理</button>
+  </div>
+  <div id="user-display" style="display:none;align-items:center;gap:8px;font-size:12px;">
+    <span id="user-name" style="color:rgba(255,255,255,0.8);"></span>
+    <button onclick="logout()" style="background:rgba(255,255,255,0.15);color:white;border:none;padding:4px 12px;border-radius:12px;cursor:pointer;font-size:11px;">ログアウト</button>
+  </div>
+</div>
+
+<!-- ===== Screen: Login ===== -->
+<div class="screen" id="screen-login">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:70vh;">
+    <div style="text-align:center;max-width:380px;background:var(--card);padding:40px 32px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.1);">
+      <div style="font-size:24px;font-weight:700;color:var(--primary);margin-bottom:8px;">建設業許可管理システム</div>
+      <div style="font-size:13px;color:var(--text-secondary);margin-bottom:32px;">Googleアカウントでログインしてください</div>
+      <a id="login-btn" style="display:inline-flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:#3c4043;border:1px solid #dadce0;border-radius:4px;padding:12px 28px;font-size:14px;font-weight:500;text-decoration:none;cursor:pointer;width:100%;box-sizing:border-box;transition:background 0.2s,box-shadow 0.2s;" onmouseover="this.style.background='#f8f9fa';this.style.boxShadow='0 1px 4px rgba(0,0,0,0.2)'" onmouseout="this.style.background='#fff';this.style.boxShadow='none'">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="20" height="20"><path fill="#EA4335" d="M24 9.5c3.2 0 5.8 1.1 7.9 2.9l5.9-5.9C34.1 3.4 29.4 1.5 24 1.5 14.8 1.5 7 7.1 3.9 14.8l6.9 5.3C12.4 13.7 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2l7.4 5.7c4.3-4 6.8-9.9 6.8-16.9z"/><path fill="#FBBC05" d="M10.8 28.4c-.5-1.4-.8-2.8-.8-4.4s.3-3 .8-4.4l-6.9-5.3C2.3 17.1 1.5 20.5 1.5 24s.8 6.9 2.4 9.7l6.9-5.3z"/><path fill="#34A853" d="M24 46.5c5.4 0 9.9-1.8 13.2-4.8l-7.4-5.7c-1.9 1.3-4.3 2-5.8 2-6.3 0-11.6-4.2-13.2-9.9l-6.9 5.3C7 40.9 14.8 46.5 24 46.5z"/></svg>
+        Googleでログイン
+      </a>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:20px;">※ 登録済みのGoogleアカウントのみアクセスできます</div>
+    </div>
   </div>
 </div>
 
@@ -335,6 +366,7 @@ tr:hover { background: #f9fafb; }
       <option value="ok">有効</option>
     </select>
     <button class="btn-primary" onclick="loadDashboard()">更新</button>
+    <button class="btn-primary" onclick="exportCsv()" style="background:#059669;">CSVエクスポート</button>
   </div>
   <div class="table-wrap">
     <table>
@@ -343,7 +375,7 @@ tr:hover { background: #f9fafb; }
           <th onclick="sortTable('company_name')">会社名</th>
           <th onclick="sortTable('permit_number')">許可番号</th>
           <th onclick="sortTable('category')">般/特</th>
-          <th onclick="sortTable('trades_count')">業種数</th>
+          <th onclick="sortTable('trades_count')">業種 <span style="font-weight:400;font-size:9px;color:#888;white-space:nowrap;"><span class="trade-tag trade-tag-ippan" style="font-size:8px;padding:0 3px;">般</span> <span class="trade-tag trade-tag-tokutei" style="font-size:8px;padding:0 3px;">特</span></span></th>
           <th onclick="sortTable('expiry_date')">有効期限</th>
           <th onclick="sortTable('days_remaining')">残日数</th>
           <th>ステータス</th>
@@ -389,6 +421,79 @@ tr:hover { background: #f9fafb; }
 <div class="toast" id="toast"></div>
 
 <script>
+// ===== Template Variables (Server-injected) =====
+var SERVER_AUTH = (function() {
+  try {
+    var raw = '<?= serverAuthResult ?>';
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+})();
+var APP_EXEC_URL = '<?= appExecUrl ?>';
+
+// ===== localStorage Fallback (Bug3: iOS Safari blocks localStorage in GAS iframes) =====
+var _memoryStorage = {};
+function safeGetItem(key) {
+  try { return localStorage.getItem(key); } catch(e) { return _memoryStorage[key] || null; }
+}
+function safeSetItem(key, val) {
+  try { localStorage.setItem(key, val); } catch(e) { _memoryStorage[key] = val; }
+}
+function safeRemoveItem(key) {
+  try { localStorage.removeItem(key); } catch(e) { delete _memoryStorage[key]; }
+}
+
+// ===== Auth State =====
+var AUTH_USER = null; // { email, role, displayName }
+
+function initAuth() {
+  // Priority 1: Server-injected OAuth result
+  if (SERVER_AUTH && SERVER_AUTH.email) {
+    AUTH_USER = SERVER_AUTH;
+    safeSetItem('authUser', JSON.stringify(AUTH_USER));
+    showApp();
+    return;
+  }
+  // Priority 2: Cached auth from localStorage
+  var cached = safeGetItem('authUser');
+  if (cached) {
+    try {
+      AUTH_USER = JSON.parse(cached);
+      if (AUTH_USER && AUTH_USER.email) { showApp(); return; }
+    } catch(e) {}
+  }
+  // Not authenticated: show login screen
+  showLoginScreen();
+}
+
+function showLoginScreen() {
+  document.querySelectorAll('.screen').forEach(function(el) { el.classList.remove('active'); });
+  document.getElementById('screen-login').classList.add('active');
+  document.querySelector('.nav-pills').style.display = 'none';
+}
+
+function showApp() {
+  document.querySelector('.nav-pills').style.display = 'flex';
+  updateUserDisplay();
+  showScreen('dashboard');
+}
+
+function logout() {
+  AUTH_USER = null;
+  safeRemoveItem('authUser');
+  if (APP_EXEC_URL) {
+    window.top.location.href = APP_EXEC_URL + '?oauthStart=1';
+  } else {
+    showLoginScreen();
+  }
+}
+
+function updateUserDisplay() {
+  if (AUTH_USER) {
+    document.getElementById('user-name').textContent = AUTH_USER.displayName || AUTH_USER.email;
+    document.getElementById('user-display').style.display = 'flex';
+  }
+}
+
 // ===== XSS Prevention =====
 function esc(s) {
   if (s === null || s === undefined) return '';
@@ -403,13 +508,50 @@ var state = { screen: 'dashboard', rows: [], filteredRows: [], sortKey: 'days_re
 // ===== API =====
 function callApi(fn, args) {
   args = args || [];
+  // Append auth user as clientUserKey (last argument)
+  args.push(AUTH_USER ? JSON.stringify(AUTH_USER) : '');
   return new Promise(function(resolve, reject) {
     var runner = google.script.run.withSuccessHandler(function(res) {
-      if (res && res._error) reject(new Error(res.message));
+      if (res && res._error) {
+        // Check for auth errors
+        if (res.message && res.message.indexOf('UNAUTHORIZED') >= 0) {
+          logout();
+          reject(new Error('セッションが切れました'));
+          return;
+        }
+        reject(new Error(res.message));
+      }
       else resolve(res);
     }).withFailureHandler(reject);
     runner[fn].apply(runner, args);
   });
+}
+
+// ===== Trade Matrix Constants =====
+var TRADE_29_SHORT = ['土','建','大','左','と','石','屋','電','管','タ','鋼','筋','舗','浚','板','ガ','塗','防','内','機','熱','通','園','井','具','水','消','清','解'];
+var TRADE_29_FULL = ['土木一式','建築一式','大工','左官','とび・土工','石','屋根','電気','管','タイル・れんが','鋼構造物','鉄筋','舗装','しゅんせつ','板金','ガラス','塗装','防水','内装仕上','機械器具設置','熱絶縁','電気通信','造園','さく井','建具','水道施設','消防施設','清掃施設','解体'];
+
+function renderTradeMatrix(tradesIppan, tradesTokutei) {
+  var ippanList = (tradesIppan || '').split('|').map(function(s) { return s.trim(); }).filter(Boolean);
+  var tokuteiList = (tradesTokutei || '').split('|').map(function(s) { return s.trim(); }).filter(Boolean);
+  if (ippanList.length === 0 && tokuteiList.length === 0) return '<span style="color:#999;font-size:11px">—</span>';
+
+  var html = '<div class="trade-tags">';
+  for (var i = 0; i < TRADE_29_SHORT.length; i++) {
+    var fullName = TRADE_29_FULL[i];
+    var shortName = TRADE_29_SHORT[i];
+    var isIppan = ippanList.some(function(t) { return fullName.indexOf(t) >= 0 || t.indexOf(fullName.substring(0, 2)) >= 0; });
+    var isTokutei = tokuteiList.some(function(t) { return fullName.indexOf(t) >= 0 || t.indexOf(fullName.substring(0, 2)) >= 0; });
+    if (isIppan && isTokutei) {
+      html += '<span class="trade-tag trade-tag-both" title="' + esc(fullName) + ' (般+特)">' + esc(shortName) + '</span>';
+    } else if (isTokutei) {
+      html += '<span class="trade-tag trade-tag-tokutei" title="' + esc(fullName) + ' (特定)">' + esc(shortName) + '</span>';
+    } else if (isIppan) {
+      html += '<span class="trade-tag trade-tag-ippan" title="' + esc(fullName) + ' (一般)">' + esc(shortName) + '</span>';
+    }
+  }
+  html += '</div>';
+  return html;
 }
 
 // ===== Screen Routing =====
@@ -544,7 +686,7 @@ function renderTable() {
       '<td style="font-weight:500">' + esc(r.company_name) + '</td>' +
       '<td>' + permitDisplay + '</td>' +
       '<td style="text-align:center">' + esc(r.category) + '</td>' +
-      '<td style="text-align:center">' + esc(r.trades_count) + '</td>' +
+      '<td>' + renderTradeMatrix(r.trades_ippan, r.trades_tokutei) + '</td>' +
       '<td>' + esc(r.expiry_date) + '</td>' +
       '<td style="text-align:right;' + daysColor + '">' + esc(days) + '</td>' +
       '<td><span class="status-chip ' + sc + '"><span class="chip-icon">' + icon + '</span>' + label + '</span></td>' +
@@ -580,6 +722,9 @@ function renderDetail(data) {
   html += '<div class="action-buttons">';
   if (isActive) html += '<button class="btn-action btn-danger" onclick="deactivateCompany(\'' + cid + '\')">無効化</button>';
   else html += '<button class="btn-action btn-success" onclick="reactivateCompany(\'' + cid + '\')">再有効化</button>';
+  if (AUTH_USER && AUTH_USER.role === 'admin') {
+    html += '<button class="btn-action btn-danger" onclick="hardDeleteCompany(\'' + cid + '\', \'' + displayName.replace(/'/g, "\\'") + '\')" style="border-color:#991b1b;color:#991b1b;">完全削除（管理者）</button>';
+  }
   html += '</div></div>';
 
   html += '<div class="detail-section"><h3>許可情報</h3>';
@@ -595,6 +740,13 @@ function renderDetail(data) {
     if (p.trades_ippan) trades.push('般: ' + esc(p.trades_ippan.replace(/\|/g, ', ')));
     if (p.trades_tokutei) trades.push('特: ' + esc(p.trades_tokutei.replace(/\|/g, ', ')));
     html += '<div class="detail-row"><div class="detail-label">業種</div><div class="detail-value">' + (trades.join('<br>') || 'なし') + '</div></div>';
+    html += '<div class="detail-row"><div class="detail-label">業種マトリクス</div><div class="detail-value">' +
+      renderTradeMatrix(p.trades_ippan, p.trades_tokutei) +
+      '<div class="trade-legend">' +
+      '<span><span class="trade-legend-dot" style="background:#3b82f6"></span> 般</span>' +
+      '<span><span class="trade-legend-dot" style="background:#ec4899"></span> 特</span>' +
+      '<span><span class="trade-legend-dot" style="background:linear-gradient(135deg,#3b82f6 50%,#ec4899 50%)"></span> 両方</span>' +
+      '</div></div></div>';
     html += '</div>';
   });
   html += '<div class="action-buttons" style="margin-top:12px"><button class="btn-primary" onclick="sendNotification(\'' + cid + '\')">今すぐ通知送信</button></div></div>';
@@ -633,7 +785,67 @@ function loadAdmin() {
   callApi('apiGetAuditLog', [20]).then(function(ls) { if (!ls || !ls.length) { document.getElementById('audit-log').innerHTML = '<p style="color:#999">監査ログなし</p>'; return; } var h = '<table class="log-table"><tr><th>日時</th><th>操作者</th><th>操作</th><th>対象</th><th>詳細</th></tr>'; ls.forEach(function(l) { h += '<tr><td>' + esc(l.timestamp) + '</td><td>' + esc((l.user_email||'').split('@')[0]) + '</td><td>' + esc(l.action) + '</td><td>' + esc(l.target_id) + '</td><td>' + esc(String(l.details||'').substring(0,40)) + '</td></tr>'; }); document.getElementById('audit-log').innerHTML = h + '</table>'; });
 }
 
-document.addEventListener('DOMContentLoaded', function() { loadDashboard(); });
+// ===== CSV Export =====
+function exportCsv() {
+  callApi('apiExportCsv').then(function(result) {
+    if (!result || !result.csv) { showToast('エクスポートに失敗しました', 'error'); return; }
+    // GAS iframe内ではBlobダウンロードが制限される場合がある
+    // data: URI方式でダウンロード（より互換性が高い）
+    var bom = '\uFEFF';
+    var csvContent = bom + result.csv;
+    try {
+      // 方式1: Blob（通常ブラウザ）
+      var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename || 'export.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch(e1) {
+      // 方式2: data URI フォールバック
+      try {
+        var encoded = encodeURIComponent(csvContent);
+        var a2 = document.createElement('a');
+        a2.href = 'data:text/csv;charset=utf-8,' + encoded;
+        a2.download = result.filename || 'export.csv';
+        a2.target = '_blank';
+        document.body.appendChild(a2);
+        a2.click();
+        document.body.removeChild(a2);
+      } catch(e2) {
+        // 方式3: 新しいウィンドウにCSVテキストを表示
+        var w = window.open('', '_blank');
+        if (w) { w.document.write('<pre>' + csvContent + '</pre>'); w.document.title = result.filename; }
+        else { showToast('ポップアップがブロックされました', 'error'); return; }
+      }
+    }
+    showToast('CSVをダウンロードしました');
+  }).catch(function(e) { showToast('エクスポートエラー: ' + e.message, 'error'); });
+}
+
+// ===== Hard Delete =====
+function hardDeleteCompany(cid, name) {
+  if (!confirm('【警告】' + name + ' を完全に削除します。\n\n関連する許可証・通知履歴も全て削除されます。\nこの操作は取り消せません。\n\n本当に削除しますか？')) return;
+  var confirmCode = prompt('確認のため、会社ID「' + cid + '」の先頭8文字を入力してください:');
+  if (!confirmCode) return;
+  callApi('apiHardDeleteCompany', [cid, confirmCode]).then(function(r) {
+    showToast('削除完了: ' + (r.deleted ? r.deleted.company + ' (許可' + r.deleted.permits + '件, 通知' + r.deleted.notifications + '件)' : ''));
+    showScreen('dashboard');
+  }).catch(function(e) { showToast(e.message, 'error'); });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  // Set login button href
+  var loginBtn = document.getElementById('login-btn');
+  if (loginBtn) {
+    loginBtn.href = (APP_EXEC_URL || '') + '?oauthStart=1';
+    loginBtn.target = '_top';
+  }
+  initAuth();
+});
 </script>
 </body>
 </html>
