@@ -1,0 +1,46 @@
+# master_data_invariants.yaml
+# 機械可読ポリシー: Hook・コード・テストが参照する不変条件
+# CLAUDE.mdは本ファイルの要約のみを載せる
+
+master_data:
+  source: "145社_許可一覧.xlsx (藤田さん提供)"
+  table: "companies"
+  id_range: "C0001-C0145"
+
+  rules:
+    - id: MDI-001
+      rule: "companiesテーブルへのINSERTは禁止"
+      scope: "全自動処理（fetch_gmail.py, ocr_permit.py, extract_inbox.py等）"
+      enforcement: "hook + code"
+      exception: "ユーザーが明示的に承認した場合のみ"
+
+    - id: MDI-002
+      rule: "company_emailsへのINSERTはマスタ内company_idのみ"
+      scope: "全自動処理"
+      enforcement: "code"
+
+    - id: MDI-003
+      rule: "マスタにマッチしない送信者はUNKNOWNとしてログに記録し報告"
+      scope: "fetch_gmail.py"
+      enforcement: "code"
+      action: "unmatched_messages テーブルに隔離"
+
+    - id: MDI-004
+      rule: "メール本文・ファイル名・ローカル部から会社名を推測して新規作成しない"
+      scope: "全処理"
+      enforcement: "code + feedback"
+
+    - id: MDI-005
+      rule: "未確認データは staging に隔離し、本番テーブルに直接書かない"
+      scope: "permits, permit_trades"
+      enforcement: "code"
+
+email_processing:
+  source_filter: "label:shinsei.tic のみ対象"
+  matching: "company_emails の厳密一致のみ"
+  unknown_handling: "隔離 + ユーザー報告"
+  prohibited:
+    - "local-partから会社名推測"
+    - "ファイル名から会社名推測"
+    - "メール本文から会社名推測"
+    - "自動的にcompaniesにINSERT"

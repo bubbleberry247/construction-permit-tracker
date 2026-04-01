@@ -38,6 +38,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 INBOX_DIR = PROJECT_ROOT / "data" / "inbox"
 SUCCESS_DIR = PROJECT_ROOT / "data" / "processed" / "success"
 SKIP_DIR = PROJECT_ROOT / "data" / "processed" / "skip"
+STAGING_DATA_DIR = PROJECT_ROOT / "data" / "staging"
 STAGING_DIR = PROJECT_ROOT / "output"
 
 PAGE_TAGS_CSV = STAGING_DIR / "page_tags.csv"
@@ -222,6 +223,69 @@ def save_ocr_overrides(source_file: str, page_no: int, fields: dict[str, str]) -
     AppState.ocr_overrides[key].update(fields)
 
 
+def load_staging_manifest() -> list[dict]:
+    """Load data/staging/manifest.csv → list of manifest rows."""
+    manifest_path = STAGING_DATA_DIR / "manifest.csv"
+    if not manifest_path.exists():
+        return []
+    rows: list[dict] = []
+    with open(manifest_path, encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rows.append(row)
+    return rows
+
+
+def scan_staging_files() -> list[dict]:
+    """Scan data/staging/ subdirectories and return file info grouped by company.
+
+    Returns list of dicts with keys:
+        company_id, company_name, dir_name, files (list of Path),
+        manifest_entries (list of manifest row dicts)
+    """
+    if not STAGING_DATA_DIR.exists():
+        return []
+
+    manifest_rows = load_staging_manifest()
+    # Index manifest by staged_path for quick lookup
+    manifest_by_path: dict[str, dict] = {}
+    for row in manifest_rows:
+        staged = row.get("staged_path", "")
+        if staged:
+            # Normalize path separators for cross-platform matching
+            manifest_by_path[Path(staged).as_posix()] = row
+
+    companies: list[dict] = []
+    for subdir in sorted(STAGING_DATA_DIR.iterdir()):
+        if not subdir.is_dir():
+            continue
+        dir_name = subdir.name
+        # Parse company_id from directory name (e.g. "C0075_中部建装株式会社" or "UNKNOWN_...")
+        parts = dir_name.split("_", 1)
+        company_id = parts[0] if parts else "UNKNOWN"
+        company_name = parts[1] if len(parts) > 1 else dir_name
+
+        files: list[Path] = []
+        manifest_entries: list[dict] = []
+        for f in sorted(subdir.iterdir()):
+            if f.is_file():
+                files.append(f)
+                # Find manifest entry
+                f_posix = f.as_posix()
+                entry = manifest_by_path.get(f_posix, {})
+                manifest_entries.append(entry)
+
+        if files:
+            companies.append({
+                "company_id": company_id,
+                "company_name": company_name,
+                "dir_name": dir_name,
+                "files": files,
+                "manifest_entries": manifest_entries,
+            })
+    return companies
+
+
 def find_pdf_path(source_file: str) -> Path | None:
     candidates = [
         SUCCESS_DIR / source_file,
@@ -236,6 +300,17 @@ def find_pdf_path(source_file: str) -> Path | None:
             for p in directory.iterdir():
                 if p.name == source_file:
                     return p
+    # Search in staging subdirectories
+    if STAGING_DATA_DIR.exists():
+        for subdir in STAGING_DATA_DIR.iterdir():
+            if subdir.is_dir():
+                candidate = subdir / source_file
+                if candidate.exists():
+                    return candidate
+                # Also try matching just the filename in nested paths
+                for f in subdir.iterdir():
+                    if f.name == source_file and f.is_file():
+                        return f
     return None
 
 
@@ -305,6 +380,12 @@ class AppState:
 
     # OCR overrides: (source_file, page_no) -> {field_name: value}
     ocr_overrides: dict[tuple[str, int], dict[str, str]] = {}
+
+    # Staging companies: list of company groups from data/staging/
+    staging_companies: list[dict] = []
+
+    # Staging manifest index: filename -> manifest row
+    staging_manifest: dict[str, dict] = {}
 
     @classmethod
     def get_file_info(cls, source_file: str) -> dict:
@@ -684,6 +765,117 @@ body { font-family: "Segoe UI", "Meiryo", sans-serif; background: #f5f7fa; overf
 .status-pill.ok { background: #d1fae5; color: #065f46; }
 .status-pill.skip { background: #f3f4f6; color: #374151; }
 .status-pill.approved { background: #fef3c7; color: #92400e; }
+
+/* ── Staging section ── */
+.staging-section {
+  border-top: 2px solid #1b3d6f;
+  margin-top: 4px;
+}
+.staging-section-header {
+  padding: 6px 12px;
+  font-size: 10px; font-weight: 700; color: #1b3d6f;
+  text-transform: uppercase; letter-spacing: 0.6px;
+  background: #eff6ff; border-bottom: 1px solid #dbeafe;
+  display: flex; align-items: center; gap: 6px;
+}
+.staging-company-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px 4px;
+  border-bottom: 1px solid #e2e8f0;
+  cursor: pointer;
+  transition: background 0.1s;
+  user-select: none;
+  background: #fefce8;
+}
+.staging-company-header:hover { background: #fef9c3; }
+.staging-company-id { font-size: 10px; color: #92400e; font-weight: 700; }
+.staging-company-name { font-size: 11px; color: #374151; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staging-file-count { font-size: 10px; color: #9ca3af; }
+
+.staging-file-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px 4px 18px;
+  border-bottom: 1px solid #f1f5f9;
+  cursor: pointer;
+  transition: background 0.1s;
+  user-select: none;
+}
+.staging-file-header:hover { background: #f8fafc; }
+.staging-file-header.active-file { background: #eff6ff; border-left: 3px solid #1b3d6f; padding-left: 15px; }
+.staging-file-header.is-duplicate {
+  opacity: 0.55;
+}
+.staging-file-header.is-duplicate .file-name {
+  text-decoration: line-through;
+  color: #9ca3af;
+}
+.dup-badge {
+  font-size: 8px; padding: 1px 4px;
+  border-radius: 6px; color: #fff; font-weight: 700;
+  background: #ef4444;
+}
+.conf-badge {
+  font-size: 8px; padding: 1px 4px;
+  border-radius: 6px; font-weight: 600;
+}
+.conf-HIGH { background: #d1fae5; color: #065f46; }
+.conf-MEDIUM { background: #fef3c7; color: #92400e; }
+.conf-LOW { background: #fee2e2; color: #991b1b; }
+.hbadge-staging { background: #3b82f6; color: #fff; }
+
+/* ── Multi-select ── */
+.multi-select-active .page-thumb-row { cursor: crosshair; }
+.page-thumb-row.selected-page {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+  background: #dbeafe !important;
+}
+.multi-select-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  background: #1e293b; border-bottom: 1px solid #334155;
+  flex-shrink: 0;
+}
+.ms-btn {
+  background: #334155; color: #e2e8f0;
+  border: none; border-radius: 4px;
+  padding: 3px 8px; font-size: 11px;
+  cursor: pointer; font-family: inherit;
+  transition: background 0.1s;
+}
+.ms-btn:hover { background: #475569; }
+.ms-btn.active { background: #2563eb; color: #fff; }
+.ms-count { color: #93c5fd; font-size: 11px; }
+
+.bulk-panel {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #eff6ff; border-radius: 6px;
+  border: 1.5px solid #bfdbfe;
+}
+.bulk-panel-title {
+  font-size: 11px; font-weight: 700; color: #1e40af;
+  margin-bottom: 8px;
+}
+.bulk-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px;
+}
+.bulk-row label { font-size: 11px; color: #374151; min-width: 60px; }
+.bulk-select {
+  flex: 1; padding: 4px 8px;
+  border: 1px solid #bfdbfe; border-radius: 4px;
+  font-size: 12px; font-family: inherit;
+}
+.bulk-apply-btn {
+  padding: 5px 12px; border-radius: 4px;
+  border: none; cursor: pointer;
+  font-size: 11px; font-weight: 600;
+  font-family: inherit;
+  background: #2563eb; color: #fff;
+  transition: background 0.15s;
+}
+.bulk-apply-btn:hover { background: #1d4ed8; }
 </style>
 </head>
 <body>
@@ -694,13 +886,17 @@ body { font-family: "Segoe UI", "Meiryo", sans-serif; background: #f5f7fa; overf
     <span id="ok-count" class="hbadge hbadge-ok">—</span>
     <span id="skip-count" class="hbadge hbadge-skip">—</span>
     <span id="approved-count" class="hbadge hbadge-approved">—</span>
+    <span id="staging-count" class="hbadge hbadge-staging" style="display:none">—</span>
   </div>
 </div>
 
 <div class="layout">
   <!-- Left Pane -->
   <div class="left-pane">
-    <div class="left-pane-header">ファイル一覧</div>
+    <div class="left-pane-header" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>ファイル一覧</span>
+      <button class="ms-btn" id="multi-select-btn" onclick="toggleMultiSelect()" title="複数選択モード">複数選択</button>
+    </div>
     <div class="file-list" id="file-list">
       <div style="padding:12px;color:#9ca3af;font-size:12px;">読み込み中...</div>
     </div>
@@ -762,6 +958,7 @@ body { font-family: "Segoe UI", "Meiryo", sans-serif; background: #f5f7fa; overf
 <script>
 var state = {
   files: [],
+  stagingCompanies: [],  // company groups from data/staging/
   selectedFile: null,
   selectedPage: 1,
   totalPages: 1,
@@ -769,7 +966,11 @@ var state = {
   rotation: 0,
   overlayVisible: false,
   expandedFiles: {},   // source_file -> bool
+  expandedCompanies: {},  // company dir_name -> bool
   pageTagsCache: {},   // "file|page" -> doc_type
+  multiSelect: false,
+  selectedPages: [],   // [{file: source_file, page: pageNo}, ...]
+  lastSelectedIdx: -1, // for shift-click range
 };
 
 var BADGE_COLORS = {
@@ -813,6 +1014,7 @@ function loadFiles() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       state.files = data.files;
+      state.stagingCompanies = data.staging_companies || [];
       // Build page tags cache from returned data
       data.files.forEach(function(f) {
         if (f.page_tags) {
@@ -820,6 +1022,16 @@ function loadFiles() {
             state.pageTagsCache[f.source_file + '|' + pn] = f.page_tags[pn];
           });
         }
+      });
+      // Also cache staging file page tags
+      state.stagingCompanies.forEach(function(company) {
+        company.files.forEach(function(f) {
+          if (f.page_tags) {
+            Object.keys(f.page_tags).forEach(function(pn) {
+              state.pageTagsCache[f.source_file + '|' + pn] = f.page_tags[pn];
+            });
+          }
+        });
       });
       renderFileList();
       updateHeaderCounts(data.stats);
@@ -841,11 +1053,19 @@ function updateHeaderCounts(stats) {
   document.getElementById('ok-count').textContent = 'OK: ' + (stats.ok || 0);
   document.getElementById('skip-count').textContent = 'SKIP: ' + (stats.skip || 0);
   document.getElementById('approved-count').textContent = '承認済: ' + (stats.approved || 0);
+  var stagingEl = document.getElementById('staging-count');
+  if (stats.staging > 0) {
+    stagingEl.textContent = 'STAGING: ' + stats.staging;
+    stagingEl.style.display = '';
+  }
 }
 
 // ── File List Rendering ────────────────────────────────────────────────────
 function renderFileList() {
   var html = '';
+  var msClass = state.multiSelect ? ' multi-select-active' : '';
+
+  // ── Original files (inbox/processed) ──
   state.files.forEach(function(f) {
     var isActiveFile = f.source_file === state.selectedFile;
     var isExpanded = !!state.expandedFiles[f.source_file];
@@ -870,29 +1090,90 @@ function renderFileList() {
     html += '</div></div>';
 
     if (isExpanded) {
-      html += '<div class="page-thumb-list" id="thumbs_' + escId(f.source_file) + '">';
-      for (var p = 1; p <= pageCount; p++) {
-        var isActivePage = (f.source_file === state.selectedFile && p === state.selectedPage);
-        var docType = getPageDocType(f.source_file, p, f);
-        var badgeColor = BADGE_COLORS[docType] || '#9E9E9E';
-        var badgeShort = BADGE_SHORT[docType] || '他';
-        var rowClass = 'page-thumb-row' + (isActivePage ? ' active-page' : '');
-        var thumbSrc = '/api/thumb/' + encodeURIComponent(f.source_file) + '/' + p;
-
-        html += '<div class="' + rowClass + '" id="prow_' + escId(f.source_file) + '_' + p + '"';
-        html += ' onclick="selectPage(\'' + escJs(f.source_file) + '\',' + p + ')">';
-        html += '<img class="page-thumb-img" src="' + thumbSrc + '" alt="P' + p + '" loading="lazy">';
-        html += '<div class="page-thumb-info">';
-        html += '<div class="page-thumb-num">P' + p + '</div>';
-        html += '<span class="page-doc-badge" style="background:' + badgeColor + '">' + escHtml(badgeShort) + '</span>';
-        html += '</div></div>';
-      }
-      html += '</div>';
+      html += renderPageThumbs(f, pageCount, msClass);
     }
   });
 
+  // ── Staging files (data/staging/) ──
+  if (state.stagingCompanies.length > 0) {
+    html += '<div class="staging-section">';
+    html += '<div class="staging-section-header">📂 staging（受信ファイル）</div>';
+    state.stagingCompanies.forEach(function(company) {
+      var isCompanyExpanded = !!state.expandedCompanies[company.dir_name];
+      var arrowClass2 = isCompanyExpanded ? 'file-expand-arrow open' : 'file-expand-arrow';
+      var fileCount = company.files.length;
+
+      html += '<div class="staging-company-header" onclick="toggleCompanyExpand(\'' + escJs(company.dir_name) + '\')">';
+      html += '<span class="' + arrowClass2 + '">▶</span>';
+      html += '<span class="staging-company-id">' + escHtml(company.company_id) + '</span>';
+      html += '<span class="staging-company-name" title="' + escHtml(company.company_name) + '">' + escHtml(company.company_name) + '</span>';
+      html += '<span class="staging-file-count">' + fileCount + '</span>';
+      html += '</div>';
+
+      if (isCompanyExpanded) {
+        company.files.forEach(function(f) {
+          var isActiveFile = f.source_file === state.selectedFile;
+          var pageCount = f.page_count || 0;
+          var isDup = !!f.is_duplicate;
+          var confidence = f.confidence || '';
+          var fileClass = 'staging-file-header' + (isActiveFile ? ' active-file' : '') + (isDup ? ' is-duplicate' : '');
+
+          html += '<div class="' + fileClass + '" onclick="toggleExpand(\'' + escJs(f.source_file) + '\')">';
+          html += '<span class="file-icon">📄</span>';
+          html += '<div class="file-meta">';
+          html += '<div class="file-name" title="' + escHtml(f.source_file) + '">' + escHtml(f.source_file) + '</div>';
+          html += '<div class="file-sub">';
+          html += '<span>' + pageCount + 'p</span>';
+          if (isDup) html += '<span class="dup-badge">重複</span>';
+          if (confidence) html += '<span class="conf-badge conf-' + escHtml(confidence) + '">' + escHtml(confidence) + '</span>';
+          html += '</div>';
+          html += '</div></div>';
+
+          var isExpanded = !!state.expandedFiles[f.source_file];
+          if (isExpanded) {
+            html += renderPageThumbs(f, pageCount, msClass);
+          }
+        });
+      }
+    });
+    html += '</div>';
+  }
+
   document.getElementById('file-list').innerHTML = html ||
     '<div style="padding:12px;color:#9ca3af;font-size:12px;">ファイルがありません</div>';
+
+  // Update multi-select button state
+  var msBtn = document.getElementById('multi-select-btn');
+  if (msBtn) {
+    msBtn.classList.toggle('active', state.multiSelect);
+    msBtn.textContent = state.multiSelect ? '選択中 (' + state.selectedPages.length + ')' : '複数選択';
+  }
+}
+
+function renderPageThumbs(f, pageCount, msClass) {
+  var html = '<div class="page-thumb-list' + msClass + '" id="thumbs_' + escId(f.source_file) + '">';
+  for (var p = 1; p <= pageCount; p++) {
+    var isActivePage = (f.source_file === state.selectedFile && p === state.selectedPage);
+    var isSelected = isPageSelected(f.source_file, p);
+    var docType = getPageDocType(f.source_file, p, f);
+    var badgeColor = BADGE_COLORS[docType] || '#9E9E9E';
+    var badgeShort = BADGE_SHORT[docType] || '他';
+    var rowClass = 'page-thumb-row' + (isActivePage ? ' active-page' : '') + (isSelected ? ' selected-page' : '');
+    var thumbSrc = '/api/thumb/' + encodeURIComponent(f.source_file) + '/' + p;
+    var clickHandler = state.multiSelect
+      ? 'togglePageSelection(\'' + escJs(f.source_file) + '\',' + p + ',event)'
+      : 'selectPage(\'' + escJs(f.source_file) + '\',' + p + ')';
+
+    html += '<div class="' + rowClass + '" id="prow_' + escId(f.source_file) + '_' + p + '"';
+    html += ' onclick="' + clickHandler + '">';
+    html += '<img class="page-thumb-img" src="' + thumbSrc + '" alt="P' + p + '" loading="lazy">';
+    html += '<div class="page-thumb-info">';
+    html += '<div class="page-thumb-num">P' + p + '</div>';
+    html += '<span class="page-doc-badge" style="background:' + badgeColor + '">' + escHtml(badgeShort) + '</span>';
+    html += '</div></div>';
+  }
+  html += '</div>';
+  return html;
 }
 
 function getPageDocType(sourceFile, pageNo, fileObj) {
@@ -911,14 +1192,26 @@ function getPageDocType(sourceFile, pageNo, fileObj) {
 function toggleExpand(sourceFile) {
   state.expandedFiles[sourceFile] = !state.expandedFiles[sourceFile];
   renderFileList();
-  if (state.expandedFiles[sourceFile]) {
+  if (state.expandedFiles[sourceFile] && !state.multiSelect) {
     selectPage(sourceFile, 1);
   }
+}
+
+function toggleCompanyExpand(dirName) {
+  state.expandedCompanies[dirName] = !state.expandedCompanies[dirName];
+  renderFileList();
 }
 
 function getFile(sourceFile) {
   for (var i = 0; i < state.files.length; i++) {
     if (state.files[i].source_file === sourceFile) return state.files[i];
+  }
+  // Also search staging companies
+  for (var c = 0; c < state.stagingCompanies.length; c++) {
+    var company = state.stagingCompanies[c];
+    for (var j = 0; j < company.files.length; j++) {
+      if (company.files[j].source_file === sourceFile) return company.files[j];
+    }
   }
   return null;
 }
@@ -1256,6 +1549,193 @@ function getNextPendingFile() {
   return null;
 }
 
+// ── Multi-select ──────────────────────────────────────────────────────────
+function toggleMultiSelect() {
+  state.multiSelect = !state.multiSelect;
+  if (!state.multiSelect) {
+    state.selectedPages = [];
+    state.lastSelectedIdx = -1;
+  }
+  renderFileList();
+  updatePanel();
+}
+
+function isPageSelected(sourceFile, pageNo) {
+  for (var i = 0; i < state.selectedPages.length; i++) {
+    if (state.selectedPages[i].file === sourceFile && state.selectedPages[i].page === pageNo) return true;
+  }
+  return false;
+}
+
+function getPageFlatIndex(sourceFile, pageNo) {
+  var idx = 0;
+  var allFiles = getAllVisibleFiles();
+  for (var i = 0; i < allFiles.length; i++) {
+    var f = allFiles[i];
+    if (!state.expandedFiles[f.source_file]) continue;
+    for (var p = 1; p <= (f.page_count || 0); p++) {
+      if (f.source_file === sourceFile && p === pageNo) return idx;
+      idx++;
+    }
+  }
+  return -1;
+}
+
+function getPageAtFlatIndex(targetIdx) {
+  var idx = 0;
+  var allFiles = getAllVisibleFiles();
+  for (var i = 0; i < allFiles.length; i++) {
+    var f = allFiles[i];
+    if (!state.expandedFiles[f.source_file]) continue;
+    for (var p = 1; p <= (f.page_count || 0); p++) {
+      if (idx === targetIdx) return { file: f.source_file, page: p };
+      idx++;
+    }
+  }
+  return null;
+}
+
+function getAllVisibleFiles() {
+  var all = state.files.slice();
+  state.stagingCompanies.forEach(function(company) {
+    if (state.expandedCompanies[company.dir_name]) {
+      company.files.forEach(function(f) { all.push(f); });
+    }
+  });
+  return all;
+}
+
+function togglePageSelection(sourceFile, pageNo, event) {
+  if (!state.multiSelect) return;
+  event = event || window.event;
+
+  if (event && event.shiftKey && state.lastSelectedIdx >= 0) {
+    var currentIdx = getPageFlatIndex(sourceFile, pageNo);
+    if (currentIdx < 0) return;
+    var startIdx = Math.min(state.lastSelectedIdx, currentIdx);
+    var endIdx = Math.max(state.lastSelectedIdx, currentIdx);
+    for (var i = startIdx; i <= endIdx; i++) {
+      var pg = getPageAtFlatIndex(i);
+      if (pg && !isPageSelected(pg.file, pg.page)) {
+        state.selectedPages.push(pg);
+      }
+    }
+  } else {
+    var found = -1;
+    for (var j = 0; j < state.selectedPages.length; j++) {
+      if (state.selectedPages[j].file === sourceFile && state.selectedPages[j].page === pageNo) {
+        found = j;
+        break;
+      }
+    }
+    if (found >= 0) {
+      state.selectedPages.splice(found, 1);
+    } else {
+      state.selectedPages.push({ file: sourceFile, page: pageNo });
+    }
+    state.lastSelectedIdx = getPageFlatIndex(sourceFile, pageNo);
+  }
+
+  renderFileList();
+  updatePanel();
+}
+
+function selectAllPages() {
+  var allFiles = getAllVisibleFiles();
+  var totalVisible = 0;
+  allFiles.forEach(function(f) {
+    if (state.expandedFiles[f.source_file]) {
+      totalVisible += (f.page_count || 0);
+    }
+  });
+
+  if (state.selectedPages.length >= totalVisible && totalVisible > 0) {
+    state.selectedPages = [];
+  } else {
+    state.selectedPages = [];
+    allFiles.forEach(function(f) {
+      if (state.expandedFiles[f.source_file]) {
+        for (var p = 1; p <= (f.page_count || 0); p++) {
+          state.selectedPages.push({ file: f.source_file, page: p });
+        }
+      }
+    });
+  }
+  renderFileList();
+  updatePanel();
+}
+
+function applyToSelected(field, value) {
+  if (!value || state.selectedPages.length === 0) return;
+  if (field === 'doc_type') {
+    state.selectedPages.forEach(function(pg) {
+      var cacheKey = pg.file + '|' + pg.page;
+      state.pageTagsCache[cacheKey] = value;
+      var file = getFile(pg.file);
+      if (file) {
+        if (!file.page_tags) file.page_tags = {};
+        file.page_tags[pg.page] = value;
+      }
+      fetch('/api/tag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: pg.file, page_no: pg.page, doc_type: value })
+      });
+    });
+  }
+  renderFileList();
+  updatePanel();
+}
+
+function updatePanel() {
+  if (!state.multiSelect || state.selectedPages.length === 0) return;
+
+  document.getElementById('right-header').textContent =
+    state.selectedPages.length + ' ページ選択中';
+  document.getElementById('action-buttons').style.display = 'none';
+
+  var docTypeOpts = DOC_TYPES.map(function(t) {
+    return '<option value="' + escHtml(t) + '">' + escHtml(t) + '</option>';
+  }).join('');
+
+  var html = '';
+  html += '<div class="bulk-panel">';
+  html += '<div class="bulk-panel-title">一括編集 (' + state.selectedPages.length + ' ページ)</div>';
+  html += '<div class="bulk-row">';
+  html += '<label>種類:</label>';
+  html += '<select class="bulk-select" id="bulk-doc-type"><option value="">-- 選択 --</option>' + docTypeOpts + '</select>';
+  html += '</div>';
+  html += '<div class="bulk-row" style="margin-top:8px">';
+  html += '<button class="bulk-apply-btn" onclick="applyBulkDocType()">一括適用</button>';
+  html += '<button class="ms-btn" onclick="selectAllPages()" style="margin-left:4px">全選択/解除</button>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="section-title">選択ページ一覧</div>';
+  html += '<div style="max-height:300px;overflow-y:auto;">';
+  state.selectedPages.forEach(function(pg, idx) {
+    var docType = getPageDocType(pg.file, pg.page, getFile(pg.file));
+    var badgeColor = BADGE_COLORS[docType] || '#9E9E9E';
+    html += '<div style="font-size:11px;padding:2px 0;display:flex;align-items:center;gap:4px;">';
+    html += '<span style="color:#6b7280">' + (idx+1) + '.</span>';
+    html += '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(pg.file) + '">';
+    html += escHtml(getShortName(pg.file)) + ' P' + pg.page;
+    html += '</span>';
+    html += '<span class="page-doc-badge" style="background:' + badgeColor + '">' + escHtml(BADGE_SHORT[docType] || '他') + '</span>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  document.getElementById('right-body').innerHTML = html;
+}
+
+function applyBulkDocType() {
+  var sel = document.getElementById('bulk-doc-type');
+  if (sel && sel.value) {
+    applyToSelected('doc_type', sel.value);
+  }
+}
+
 // ── Utilities ──────────────────────────────────────────────────────────────
 function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -1368,6 +1848,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._handle_approve(data)
         elif path == "/api/tag":
             self._handle_tag(data)
+        elif path == "/api/tag-bulk":
+            self._handle_tag_bulk(data)
         elif path == "/api/ocr-override":
             self._handle_ocr_override(data)
         else:
@@ -1439,15 +1921,64 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 "parse_status": parse_status,
                 "doc_type": inferred_doc_type,
                 "page_tags": page_tags,
+                "source": "original",
             })
+
+        # ── Staging files from data/staging/ ──
+        staging_companies: list[dict] = []
+        staging_file_count = 0
+        for company in AppState.staging_companies:
+            company_files: list[dict] = []
+            for i, fpath in enumerate(company["files"]):
+                # Only include viewable files (PDF)
+                if fpath.suffix.lower() != ".pdf":
+                    continue
+                fname = fpath.name
+                manifest_entry = company["manifest_entries"][i] if i < len(company["manifest_entries"]) else {}
+                is_duplicate = manifest_entry.get("duplicate", "").lower() == "true"
+                confidence = manifest_entry.get("confidence", "")
+
+                info = AppState.get_file_info(fname)
+
+                # Build page_tags dict
+                page_tags_s: dict[int, str] = {}
+                for page_no in range(1, info["page_count"] + 1):
+                    tag = AppState.page_tags.get((fname, page_no))
+                    if tag:
+                        page_tags_s[page_no] = tag
+
+                company_files.append({
+                    "source_file": fname,
+                    "records": [],
+                    "page_count": info["page_count"],
+                    "pdf_exists": info["exists"],
+                    "parse_status": "STAGING",
+                    "doc_type": "その他/不明",
+                    "page_tags": page_tags_s,
+                    "source": "staging",
+                    "is_duplicate": is_duplicate,
+                    "confidence": confidence,
+                    "staging_company_id": company["company_id"],
+                })
+                staging_file_count += 1
+
+            if company_files:
+                staging_companies.append({
+                    "company_id": company["company_id"],
+                    "company_name": company["company_name"],
+                    "dir_name": company["dir_name"],
+                    "files": company_files,
+                })
 
         self.send_json({
             "files": files,
+            "staging_companies": staging_companies,
             "stats": {
                 "total": len(files),
                 "ok": ok_count,
                 "skip": skip_count,
                 "approved": approved_count,
+                "staging": staging_file_count,
             }
         })
 
@@ -1514,6 +2045,24 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
         save_page_tag(filename, page_no, doc_type)
         self.send_json({"ok": True})
+
+    # ── POST /api/tag-bulk ───────────────────────────────────────────────────
+
+    def _handle_tag_bulk(self, data: dict):
+        pages = data.get("pages", [])
+        doc_type = data.get("doc_type", "その他/不明")
+
+        if not pages:
+            self.send_json({"ok": False, "error": "pages required"}, status=400)
+            return
+
+        for pg in pages:
+            filename = pg.get("file", "")
+            page_no = int(pg.get("page", 1))
+            if filename:
+                save_page_tag(filename, page_no, doc_type)
+
+        self.send_json({"ok": True, "count": len(pages)})
 
     # ── POST /api/ocr-override ────────────────────────────────────────────────
 
@@ -1617,6 +2166,20 @@ def main():
     AppState.page_tags = load_page_tags()
     AppState.ocr_overrides = load_ocr_overrides()
 
+    # Load staging data from data/staging/
+    AppState.staging_companies = scan_staging_files()
+    staging_file_count = sum(len(c["files"]) for c in AppState.staging_companies)
+    # Build manifest index for quick lookup
+    manifest_rows = load_staging_manifest()
+    for row in manifest_rows:
+        fname = Path(row.get("staged_path", "")).name
+        if fname:
+            AppState.staging_manifest[fname] = row
+
+    print(f"  staging/     : {STAGING_DATA_DIR}")
+    print(f"  staging会社  : {len(AppState.staging_companies)} 社")
+    print(f"  stagingファイル: {staging_file_count} 件")
+
     # Pre-cache file info (page counts) — thumbnails are lazy-loaded per request
     unique_files: list[str] = list(dict.fromkeys(r.get("source_file", "") for r in records))
 
@@ -1626,6 +2189,12 @@ def main():
             for p in sorted(directory.iterdir()):
                 if p.suffix.lower() == ".pdf" and p.name not in unique_files:
                     unique_files.append(p.name)
+
+    # Also discover PDFs from staging subdirectories
+    for company in AppState.staging_companies:
+        for fpath in company["files"]:
+            if fpath.suffix.lower() == ".pdf" and fpath.name not in unique_files:
+                unique_files.append(fpath.name)
 
     print(f"  ファイルキャッシュ構築中 ({len(unique_files)} ファイル)...")
     found = 0

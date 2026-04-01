@@ -192,8 +192,14 @@ def fetch_pdf_attachments(
     # 未処理メール検索（全添付ファイル対象、処理済みラベルなし）
     # Gmail query は label_name（表示名）で除外する。label_id は addLabelIds 専用
     # shinsei.tic ラベル付きメールのみ対象（転送メール）
-    # NOTE: filename:.pdf → has:attachment に変更（ZIP/XLSX等も取得するため）
-    query = f'label:shinsei.tic has:attachment -label:"{label_name}"'
+    # NOTE: has:attachment を外し、ダウンロードリンク方式のメールも検知する
+    # セキュリティ通知等のノイズは -from: で除外
+    query = (
+        f'label:shinsei.tic -label:"{label_name}"'
+        f' -from:mailer-daemon -from:noreply -from:no-reply'
+        f' -subject:セキュリティ通知 -subject:ワンタイムパスワード'
+        f' -subject:"Google 検索" -subject:"Delivery Status"'
+    )
     response = service.users().messages().list(
         userId="me",
         q=query,
@@ -231,6 +237,19 @@ def fetch_pdf_attachments(
         # 添付ファイル探索
         pdf_parts = _find_pdf_parts(msg.get("payload", {}))
         if not pdf_parts:
+            # 添付なしメール（ダウンロードリンク方式/パスワード通知等）→ 処理済みラベルを付与してスキップ
+            if not dry_run:
+                try:
+                    service.users().messages().modify(
+                        userId="me",
+                        id=message_id,
+                        body={"addLabelIds": [label_id], "removeLabelIds": ["UNREAD"]},
+                    ).execute()
+                    logger.info("添付なし → 処理済みラベル付与: %s (%s)", sender_email[:30], received_at)
+                except Exception as e:
+                    logger.warning("ラベル付与失敗 [%s]: %s", message_id, e)
+            else:
+                logger.info("[DRY-RUN] 添付なし: %s (%s)", sender_email[:30], received_at)
             continue
 
         any_new = False

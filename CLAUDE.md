@@ -5,6 +5,7 @@
 GAS（通知・フォーム受付）+ Python（OCR・Gmail取込・Sheets登録）の2層構成。
 
 ## 技術スタック
+- **エンコーディング**: UTF-8を基本とする（CSV出力はBOM付きUTF-8、コンソール出力は `-X utf8` オプション使用）
 - **GAS**: 通知バッチ、フォーム受付、UI（Sheets メニュー）
 - **Python 3.11+**: OCR（GPT-4o Vision）、Gmail取込、Sheets登録、MLIT確認
 - **Google Sheets**: データストア（Companies / Permits / Submissions / Notifications / Config）
