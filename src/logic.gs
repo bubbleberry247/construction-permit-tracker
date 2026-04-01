@@ -123,7 +123,7 @@ function getCompanyDetail_(companyId) {
 // Company CRUD
 // ---------------------------------------------------------------------------
 function addCompany_(formData, userEmail) {
-  var companyId = 'C' + generateUuid().replace(/-/g, '').substring(0, 8);
+  var companyId = getNextCompanyId_();
   var now = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
 
   var record = {
@@ -187,6 +187,213 @@ function reactivateCompany_(companyId, userEmail) {
   writeAuditLog_(userEmail, 'REACTIVATE_COMPANY', 'Company', companyId, '');
 
   return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// MLIT Search
+// ---------------------------------------------------------------------------
+
+/**
+ * 国交省建設業者検索
+ * @param {Object} formData — {permit_authority, permit_number}
+ * @return {Object} {found, candidates, error}
+ */
+function searchMlit_(formData) {
+  var authority = formData.permit_authority || '';
+  var permitNumber = formData.permit_number || '';
+
+  // バリデーション
+  if (!authority) throw new Error('許可行政庁を選択してください');
+  if (!permitNumber) throw new Error('許可番号を入力してください');
+  if (!/^\d+$/.test(permitNumber)) throw new Error('許可番号は数字のみで入力してください');
+
+  // レート制限（3秒）
+  var cache = CacheService.getScriptCache();
+  var lastCall = cache.get('mlit_last_call');
+  if (lastCall) {
+    var elapsed = Date.now() - Number(lastCall);
+    if (elapsed < 3000) {
+      throw new Error('連続検索は3秒以上間隔を空けてください（残り' + Math.ceil((3000 - elapsed) / 1000) + '秒）');
+    }
+  }
+
+  // MLIT検索
+  var licenseNoKbn = getLicenseNoKbn_(authority);
+  var prefCode = getPrefCode_(authority);
+  var candidates = searchMlitPermit_(licenseNoKbn, permitNumber, prefCode);
+
+  // キャッシュ更新
+  cache.put('mlit_last_call', String(Date.now()), 10);
+
+  // 候補なし
+  if (!candidates || candidates.length === 0) {
+    return { found: false, error: 'NOT_FOUND', candidates: [] };
+  }
+
+  // 各候補の詳細を取得
+  var details = [];
+  for (var i = 0; i < candidates.length; i++) {
+    if (i > 0) Utilities.sleep(1000);
+    var detail = fetchMlitDetail_(candidates[i]);
+    cache.put('mlit_last_call', String(Date.now()), 10);
+
+    if (detail) {
+      detail.permitAuthority = authority;
+      detail.permitNumber = permitNumber;
+      details.push(detail);
+    }
+  }
+
+  if (details.length === 0) {
+    return { found: false, error: 'NOT_FOUND', candidates: [] };
+  }
+
+  return { found: true, candidates: details };
+}
+
+// ---------------------------------------------------------------------------
+// Company + Permit Registration（MLIT連携）
+// ---------------------------------------------------------------------------
+
+/**
+ * MLIT検索結果から会社+許可を一括登録する
+ * @param {Object} formData — MLIT検索結果+ユーザー入力
+ * @param {string} userEmail — 操作ユーザー
+ * @return {Object} {success, company_id, permit_number, isExisting, isUpsert}
+ */
+function registerCompanyWithPermit_(formData, userEmail) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    throw new Error('他の登録処理が実行中です。しばらくしてからお試しください。');
+  }
+
+  try {
+    var companyName = formData.company_name || '';
+    var permitAuthority = formData.permit_authority || '';
+    var permitNumber = formData.permit_number || '';
+    var contactEmail = formData.contact_email || '';
+    var contactPerson = formData.contact_person || '';
+    var expiryFrom = formData.expiry_from || '';
+    var expiryTo = formData.expiry_to || '';
+    var expiryWareki = formData.expiry_wareki || '';
+    var tradesIppan = formData.trades_ippan || [];
+    var tradesTokutei = formData.trades_tokutei || [];
+    var existingCompanyId = formData.existing_company_id || '';
+    var now = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
+
+    // --- MLITPermits 重複チェック（company_id横断） ---
+    var existingPermitRow = null;
+    var allPermits = readRecords_(SHEETS.MLITPermits);
+    for (var i = 0; i < allPermits.length; i++) {
+      if (String(allPermits[i].authority).trim() === permitAuthority &&
+          String(allPermits[i].permit_number).trim() === permitNumber) {
+        existingPermitRow = allPermits[i];
+        break;
+      }
+    }
+
+    if (existingPermitRow && existingPermitRow.fetch_status === 'OK') {
+      throw new Error('この許可は既に登録されています（会社: ' + (existingPermitRow.company_name || '') + '）');
+    }
+    // existingPermitRow が存在し fetch_status が OK 以外 → upsert対象
+
+    // --- Company 処理 ---
+    var companyId;
+    var isExisting = false;
+
+    if (existingCompanyId) {
+      // 既存会社に紐付け
+      var existingCompany = findByKey_(SHEETS.Companies, 'company_id', existingCompanyId);
+      if (!existingCompany) throw new Error('指定された会社が見つかりません: ' + existingCompanyId);
+      companyId = existingCompanyId;
+      isExisting = true;
+    } else {
+      // 新規会社作成
+      companyId = getNextCompanyId_();
+      var companyRecord = {
+        company_id: companyId,
+        company_name_raw: companyName,
+        company_name_normalized: normalizeCompanyName_(companyName),
+        representative_name: '',
+        contact_person: contactPerson,
+        contact_email: contactEmail,
+        contact_email_cc: '',
+        phone: '',
+        status: 'ACTIVE',
+        created_at: now,
+        updated_at: now
+      };
+      appendRecord_(SHEETS.Companies, companyRecord);
+    }
+
+    // --- MLITPermits 書込 ---
+    var daysRemaining = expiryTo ? Math.floor((new Date(expiryTo) - new Date()) / 86400000) : null;
+
+    var hasIppan = tradesIppan && tradesIppan.length > 0;
+    var hasTokutei = tradesTokutei && tradesTokutei.length > 0;
+    var category = '';
+    if (hasIppan && hasTokutei) {
+      category = '般特';
+    } else if (hasIppan) {
+      category = '般';
+    } else if (hasTokutei) {
+      category = '特';
+    }
+
+    var tradesIppanStr = Array.isArray(tradesIppan) ? tradesIppan.join('|') : String(tradesIppan || '');
+    var tradesTokuteiStr = Array.isArray(tradesTokutei) ? tradesTokutei.join('|') : String(tradesTokutei || '');
+
+    // 業種数（ユニーク）
+    var allTradesMap = {};
+    if (Array.isArray(tradesIppan)) {
+      for (var j = 0; j < tradesIppan.length; j++) {
+        if (tradesIppan[j]) allTradesMap[tradesIppan[j]] = true;
+      }
+    }
+    if (Array.isArray(tradesTokutei)) {
+      for (var k = 0; k < tradesTokutei.length; k++) {
+        if (tradesTokutei[k]) allTradesMap[tradesTokutei[k]] = true;
+      }
+    }
+    var tradesCount = Object.keys(allTradesMap).length;
+
+    var permitData = {
+      company_id: companyId,
+      company_name: companyName,
+      permit_number: permitNumber,
+      authority: permitAuthority,
+      category: category,
+      expiry_date: expiryTo,
+      expiry_wareki: expiryWareki,
+      days_remaining: daysRemaining,
+      trades_ippan: tradesIppanStr,
+      trades_tokutei: tradesTokuteiStr,
+      trades_count: tradesCount,
+      fetch_status: 'OK',
+      last_synced: now
+    };
+
+    if (existingPermitRow) {
+      // upsert: 既存行を更新
+      updateRecord_(SHEETS.MLITPermits, existingPermitRow._row, permitData);
+    } else {
+      // 新規追加
+      appendRecord_(SHEETS.MLITPermits, permitData);
+    }
+
+    // --- 監査ログ ---
+    writeAuditLog_(userEmail, 'ADD_COMPANY_MLIT', 'Company', companyId, companyName);
+
+    return {
+      success: true,
+      company_id: companyId,
+      permit_number: permitNumber,
+      isExisting: !!existingCompanyId,
+      isUpsert: !!existingPermitRow
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ---------------------------------------------------------------------------

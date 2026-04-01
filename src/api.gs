@@ -62,6 +62,42 @@ function apiGetDashboard(clientUserKey) {
 }
 
 // ---------------------------------------------------------------------------
+// MLIT Search
+// ---------------------------------------------------------------------------
+
+/**
+ * 国交省建設業者検索
+ * @param {Object} formData — {permit_authority, permit_number}
+ * @param {string} [clientUserKey]
+ */
+function apiSearchMlit(formData, clientUserKey) {
+  _setUser_(clientUserKey);
+  try {
+    requireAuth_();
+    var result = searchMlit_(formData);
+    return toSerializable_(result);
+  } catch (e) {
+    return { _error: true, message: String(e.message || e) };
+  }
+}
+
+/**
+ * MLIT検索結果から会社+許可を一括登録
+ * @param {Object} formData — MLIT検索結果+ユーザー入力
+ * @param {string} [clientUserKey]
+ */
+function apiRegisterCompanyWithPermit(formData, clientUserKey) {
+  _setUser_(clientUserKey);
+  try {
+    requireAuth_();
+    var result = registerCompanyWithPermit_(formData, __currentUserEmail);
+    return toSerializable_(result);
+  } catch (e) {
+    return { _error: true, message: String(e.message || e) };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Company CRUD
 // ---------------------------------------------------------------------------
 

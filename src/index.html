@@ -318,6 +318,18 @@ tr:hover { background: #f9fafb; }
 .trade-tag-both { background: #ede9fe; color: #6d28d9; }
 .trade-legend { display: flex; gap: 12px; font-size: 10px; color: var(--text-secondary); align-items: center; margin-top: 4px; }
 .trade-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+/* ===== Add Company Tabs & MLIT Search ===== */
+.add-tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
+.add-tab { padding: 10px 20px; border: none; background: none; cursor: pointer; font-size: 14px; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; }
+.add-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.mlit-result-card { background: #f0f7ff; border: 1px solid #b3d4fc; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.mlit-result-card .result-row { display: flex; gap: 12px; padding: 4px 0; font-size: 13px; }
+.mlit-result-card .result-label { font-weight: 600; min-width: 100px; color: var(--text-secondary); }
+.mlit-candidate { border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.2s, background 0.2s; }
+.mlit-candidate:hover { border-color: var(--primary); background: #f0f7ff; }
+.mlit-existing-box { background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; }
+.mlit-existing-box button { margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -394,15 +406,120 @@ tr:hover { background: #f9fafb; }
 
 <!-- ===== Screen: Add Company ===== -->
 <div class="screen" id="screen-add">
-  <div class="form-wrap">
+  <div class="form-wrap" style="max-width:700px">
     <button class="btn-back" onclick="showScreen('dashboard')">← ダッシュボードに戻る</button>
-    <h2 style="margin-bottom:20px;">新規会社登録</h2>
-    <div class="form-group"><label>会社名 *</label><input type="text" id="add-name" placeholder="例: 株式会社〇〇"></div>
-    <div class="form-group"><label>連絡先メール *</label><input type="email" id="add-email" placeholder="例: info@example.co.jp"></div>
-    <div class="form-group"><label>担当者名</label><input type="text" id="add-contact" placeholder="例: 山田太郎"></div>
-    <div class="form-actions">
-      <button class="btn-primary" onclick="submitAddCompany()">登録</button>
-      <button class="btn-action" onclick="showScreen('dashboard')">キャンセル</button>
+    <h2 style="margin-bottom:16px;">新規会社登録</h2>
+
+    <!-- Tab switcher -->
+    <div class="add-tabs">
+      <button class="add-tab active" id="tab-mlit" onclick="switchAddTab('mlit')">MLIT検索で登録</button>
+      <button class="add-tab" id="tab-manual" onclick="switchAddTab('manual')">手入力で登録</button>
+    </div>
+
+    <!-- Tab 1: MLIT Search (default) -->
+    <div id="add-tab-mlit">
+      <!-- Step 1: Search -->
+      <div id="mlit-step1">
+        <div class="form-group">
+          <label>許可行政庁 *</label>
+          <select id="add-authority">
+            <option value="">選択してください</option>
+            <!-- Priority: 大臣, then 愛知/岐阜/三重/静岡/滋賀, then rest -->
+            <option value="国土交通大臣">国土交通大臣</option>
+            <optgroup label="東海・近畿（優先）">
+              <option value="愛知県知事">愛知県知事</option>
+              <option value="岐阜県知事">岐阜県知事</option>
+              <option value="三重県知事">三重県知事</option>
+              <option value="静岡県知事">静岡県知事</option>
+              <option value="滋賀県知事">滋賀県知事</option>
+            </optgroup>
+            <optgroup label="その他">
+              <option value="北海道知事">北海道知事</option>
+              <option value="青森県知事">青森県知事</option>
+              <option value="岩手県知事">岩手県知事</option>
+              <option value="宮城県知事">宮城県知事</option>
+              <option value="秋田県知事">秋田県知事</option>
+              <option value="山形県知事">山形県知事</option>
+              <option value="福島県知事">福島県知事</option>
+              <option value="茨城県知事">茨城県知事</option>
+              <option value="栃木県知事">栃木県知事</option>
+              <option value="群馬県知事">群馬県知事</option>
+              <option value="埼玉県知事">埼玉県知事</option>
+              <option value="千葉県知事">千葉県知事</option>
+              <option value="東京都知事">東京都知事</option>
+              <option value="神奈川県知事">神奈川県知事</option>
+              <option value="新潟県知事">新潟県知事</option>
+              <option value="富山県知事">富山県知事</option>
+              <option value="石川県知事">石川県知事</option>
+              <option value="福井県知事">福井県知事</option>
+              <option value="山梨県知事">山梨県知事</option>
+              <option value="長野県知事">長野県知事</option>
+              <option value="京都府知事">京都府知事</option>
+              <option value="大阪府知事">大阪府知事</option>
+              <option value="兵庫県知事">兵庫県知事</option>
+              <option value="奈良県知事">奈良県知事</option>
+              <option value="和歌山県知事">和歌山県知事</option>
+              <option value="鳥取県知事">鳥取県知事</option>
+              <option value="島根県知事">島根県知事</option>
+              <option value="岡山県知事">岡山県知事</option>
+              <option value="広島県知事">広島県知事</option>
+              <option value="山口県知事">山口県知事</option>
+              <option value="徳島県知事">徳島県知事</option>
+              <option value="香川県知事">香川県知事</option>
+              <option value="愛媛県知事">愛媛県知事</option>
+              <option value="高知県知事">高知県知事</option>
+              <option value="福岡県知事">福岡県知事</option>
+              <option value="佐賀県知事">佐賀県知事</option>
+              <option value="長崎県知事">長崎県知事</option>
+              <option value="熊本県知事">熊本県知事</option>
+              <option value="大分県知事">大分県知事</option>
+              <option value="宮崎県知事">宮崎県知事</option>
+              <option value="鹿児島県知事">鹿児島県知事</option>
+              <option value="沖縄県知事">沖縄県知事</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>許可番号（数字のみ） *</label>
+          <input type="text" id="add-permit-number" placeholder="例: 57805" inputmode="numeric">
+        </div>
+        <div class="form-actions">
+          <button class="btn-primary" onclick="searchMlit()" id="btn-mlit-search">検索</button>
+          <button class="btn-action" onclick="showScreen('dashboard')">キャンセル</button>
+        </div>
+      </div>
+
+      <!-- Step 1.5: Multiple candidates -->
+      <div id="mlit-step-candidates" style="display:none">
+        <p style="margin-bottom:12px;color:var(--text-secondary)">複数の候補が見つかりました。登録する会社を選択してください。</p>
+        <div id="mlit-candidates-list"></div>
+        <div class="form-actions">
+          <button class="btn-action" onclick="resetAddForm()">検索に戻る</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Confirm + Register -->
+      <div id="mlit-step2" style="display:none">
+        <div class="mlit-result-card" id="mlit-result"></div>
+        <div id="mlit-existing-company" style="display:none"></div>
+        <div class="form-group"><label>連絡先メール</label><input type="email" id="mlit-email" placeholder="例: info@example.co.jp"></div>
+        <div class="form-group"><label>担当者名</label><input type="text" id="mlit-contact" placeholder="例: 山田太郎"></div>
+        <div class="form-actions">
+          <button class="btn-primary" onclick="submitRegisterWithPermit()">登録</button>
+          <button class="btn-action" onclick="resetAddForm()">検索に戻る</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 2: Manual entry (fallback) -->
+    <div id="add-tab-manual" style="display:none">
+      <div class="form-group"><label>会社名 *</label><input type="text" id="add-name" placeholder="例: 株式会社〇〇"></div>
+      <div class="form-group"><label>連絡先メール</label><input type="email" id="add-email" placeholder="例: info@example.co.jp"></div>
+      <div class="form-group"><label>担当者名</label><input type="text" id="add-contact" placeholder="例: 山田太郎"></div>
+      <div class="form-actions">
+        <button class="btn-primary" onclick="submitAddCompany()">登録</button>
+        <button class="btn-action" onclick="showScreen('dashboard')">キャンセル</button>
+      </div>
     </div>
   </div>
 </div>
@@ -774,8 +891,146 @@ function sendNotification(cid) { if (!confirm('通知メールを送信します
 function submitAddCompany() {
   var n = document.getElementById('add-name').value.trim(), e = document.getElementById('add-email').value.trim(), c = document.getElementById('add-contact').value.trim();
   if (!n) { showToast('会社名を入力してください', 'error'); return; }
-  if (!e) { showToast('メールアドレスを入力してください', 'error'); return; }
   callApi('apiAddCompany', [{ company_name: n, contact_email: e, contact_person: c }]).then(function(r) { showToast('登録完了: ' + r.company_id); document.getElementById('add-name').value = ''; document.getElementById('add-email').value = ''; document.getElementById('add-contact').value = ''; showScreen('dashboard'); }).catch(function(e) { showToast(e.message, 'error'); });
+}
+
+// ---------------------------------------------------------------------------
+// MLIT Search Registration
+// ---------------------------------------------------------------------------
+var mlitSearchResult = null;
+var mlitSelectedCandidate = null;
+var mlitSelectedCompanyId = null;
+
+function switchAddTab(tab) {
+  document.getElementById('add-tab-mlit').style.display = tab === 'mlit' ? '' : 'none';
+  document.getElementById('add-tab-manual').style.display = tab === 'manual' ? '' : 'none';
+  document.getElementById('tab-mlit').className = 'add-tab' + (tab === 'mlit' ? ' active' : '');
+  document.getElementById('tab-manual').className = 'add-tab' + (tab === 'manual' ? ' active' : '');
+  resetAddForm();
+}
+
+function searchMlit() {
+  var authority = document.getElementById('add-authority').value;
+  var permitNumber = document.getElementById('add-permit-number').value.trim();
+  if (!authority) { showToast('許可行政庁を選択してください', 'error'); return; }
+  if (!permitNumber) { showToast('許可番号を入力してください', 'error'); return; }
+  if (!/^\d+$/.test(permitNumber)) { showToast('許可番号は数字のみ入力してください', 'error'); return; }
+
+  var btn = document.getElementById('btn-mlit-search');
+  btn.disabled = true; btn.textContent = '検索中...';
+
+  callApi('apiSearchMlit', [{permit_authority: authority, permit_number: permitNumber}])
+    .then(function(r) {
+      btn.disabled = false; btn.textContent = '検索';
+      if (!r.found || !r.candidates || r.candidates.length === 0) {
+        var msg = r.error === 'NOT_FOUND' ? '該当する建設業者が見つかりません' :
+                  r.error && r.error.indexOf('PARSE_ERROR') === 0 ? '国交省の応答を解析できませんでした。手入力タブをご利用ください' :
+                  r.error || '検索結果がありません';
+        showToast(msg, 'error');
+        return;
+      }
+      mlitSearchResult = r;
+      if (r.candidates.length === 1) {
+        mlitSelectedCandidate = r.candidates[0];
+        showMlitStep2();
+      } else {
+        renderMlitCandidates(r.candidates);
+      }
+    })
+    .catch(function(e) {
+      btn.disabled = false; btn.textContent = '検索';
+      var msg = String(e.message || e);
+      if (msg.indexOf('500') >= 0 || msg.indexOf('503') >= 0) msg = '国交省サーバーが応答しません。手入力タブをご利用ください';
+      showToast(msg, 'error');
+    });
+}
+
+function renderMlitCandidates(candidates) {
+  var html = '';
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i];
+    html += '<div class="mlit-candidate" onclick="selectMlitCandidate(' + i + ')">';
+    html += '<div style="font-weight:600;margin-bottom:4px">' + esc(c.apiName || '不明') + '</div>';
+    html += '<div style="font-size:12px;color:var(--text-secondary)">';
+    html += '有効期限: ' + esc(c.expiryFrom || '?') + ' ～ ' + esc(c.expiryTo || '?');
+    if (c.tradesIppan && c.tradesIppan.length) html += ' | 般: ' + esc(c.tradesIppan.join(', '));
+    if (c.tradesTokutei && c.tradesTokutei.length) html += ' | 特: ' + esc(c.tradesTokutei.join(', '));
+    html += '</div></div>';
+  }
+  document.getElementById('mlit-candidates-list').innerHTML = html;
+  document.getElementById('mlit-step1').style.display = 'none';
+  document.getElementById('mlit-step-candidates').style.display = '';
+}
+
+function selectMlitCandidate(index) {
+  mlitSelectedCandidate = mlitSearchResult.candidates[index];
+  showMlitStep2();
+}
+
+function showMlitStep2() {
+  var r = mlitSelectedCandidate;
+  var tradesIppan = (r.tradesIppan || []).join(', ');
+  var tradesTokutei = (r.tradesTokutei || []).join(', ');
+
+  var html = '';
+  html += '<div class="result-row"><div class="result-label">会社名</div><div>' + esc(r.apiName || '') + '</div></div>';
+  html += '<div class="result-row"><div class="result-label">許可行政庁</div><div>' + esc(r.permitAuthority || '') + '</div></div>';
+  html += '<div class="result-row"><div class="result-label">許可番号</div><div>第' + esc(r.permitNumber || '') + '号</div></div>';
+  html += '<div class="result-row"><div class="result-label">有効期間</div><div>' + esc(r.expiryFrom || '') + ' ～ ' + esc(r.expiryTo || '') + '</div></div>';
+  if (tradesIppan) html += '<div class="result-row"><div class="result-label">一般業種</div><div>' + esc(tradesIppan) + '</div></div>';
+  if (tradesTokutei) html += '<div class="result-row"><div class="result-label">特定業種</div><div>' + esc(tradesTokutei) + '</div></div>';
+
+  document.getElementById('mlit-result').innerHTML = html;
+  document.getElementById('mlit-step1').style.display = 'none';
+  document.getElementById('mlit-step-candidates').style.display = 'none';
+  document.getElementById('mlit-step2').style.display = '';
+
+  // Check existing companies with similar name
+  mlitSelectedCompanyId = null;
+  document.getElementById('mlit-existing-company').style.display = 'none';
+  // Note: existing company check happens server-side during registration
+}
+
+function submitRegisterWithPermit() {
+  if (!mlitSelectedCandidate) { showToast('検索結果がありません', 'error'); return; }
+  var r = mlitSelectedCandidate;
+  var formData = {
+    company_name: r.apiName || '',
+    permit_authority: r.permitAuthority || '',
+    permit_number: r.permitNumber || '',
+    contact_email: document.getElementById('mlit-email').value.trim(),
+    contact_person: document.getElementById('mlit-contact').value.trim(),
+    expiry_from: r.expiryFrom || '',
+    expiry_to: r.expiryTo || '',
+    expiry_wareki: r.expiryWareki || '',
+    trades_ippan: r.tradesIppan || [],
+    trades_tokutei: r.tradesTokutei || [],
+    existing_company_id: mlitSelectedCompanyId || ''
+  };
+  callApi('apiRegisterCompanyWithPermit', [formData])
+    .then(function(res) {
+      var msg = res.isUpsert ? '既存データを更新しました' : (res.isExisting ? '既存会社に許可を追加しました' : '新規登録完了');
+      showToast(msg + ': ' + res.company_id);
+      resetAddForm();
+      showScreen('dashboard');
+    })
+    .catch(function(e) { showToast(String(e.message || e), 'error'); });
+}
+
+function resetAddForm() {
+  mlitSearchResult = null;
+  mlitSelectedCandidate = null;
+  mlitSelectedCompanyId = null;
+  document.getElementById('mlit-step1').style.display = '';
+  document.getElementById('mlit-step-candidates').style.display = 'none';
+  document.getElementById('mlit-step2').style.display = 'none';
+  document.getElementById('add-authority').value = '';
+  document.getElementById('add-permit-number').value = '';
+  document.getElementById('mlit-email').value = '';
+  document.getElementById('mlit-contact').value = '';
+  document.getElementById('mlit-result').innerHTML = '';
+  document.getElementById('mlit-candidates-list').innerHTML = '';
+  document.getElementById('mlit-existing-company').style.display = 'none';
 }
 
 // ===== Admin =====
