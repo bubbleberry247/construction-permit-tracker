@@ -466,3 +466,11 @@ function testMlitSearch_() {
 
   Logger.log('\n=== Test Complete ===');
 }
+
+/**
+ * GASエディタから実行可能なテスト関数（公開）
+ * 関数ドロップダウンに表示される
+ */
+function runMlitSearchTest() {
+  testMlitSearch_();
+}
