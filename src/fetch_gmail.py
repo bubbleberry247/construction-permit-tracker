@@ -226,7 +226,10 @@ def fetch_pdf_attachments(
 
         # 送信者・受信日時
         headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
-        sender_email = headers.get("from", "")
+        sender_email_raw = headers.get("from", "")
+        # 山括弧除去: "Name <email>" や "<email>" → "email"
+        _m = re.search(r'<([^>]+)>', sender_email_raw)
+        sender_email = _m.group(1) if _m else sender_email_raw.strip()
         internal_date_ms = int(msg.get("internalDate", 0))
         received_at = datetime.fromtimestamp(internal_date_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
 

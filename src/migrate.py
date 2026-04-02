@@ -213,7 +213,10 @@ def migrate_inbound(conn: sqlite3.Connection, name_to_id: dict[str, str]) -> dic
             continue
         seen_messages.add(mid)
 
-        sender = r.get("sender_email", "").strip()
+        sender_raw = r.get("sender_email", "").strip()
+        # 山括弧除去: "Name <email>" や "<email>" → "email"
+        _m = re.search(r'<([^>]+)>', sender_raw)
+        sender = _m.group(1) if _m else sender_raw
         original_sender = r.get("original_sender_email", "").strip()
         received = r.get("received_at", "").strip()
 
