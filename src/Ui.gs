@@ -171,7 +171,7 @@ function initSheetHeaders() {
     ['ADMIN_EMAILS',        '',               '管理者メールアドレス（カンマ区切り）'],
     ['DRIVE_ROOT_FOLDER_ID','',               '許可証PDF保管フォルダのID'],
     ['FORM_ID',             '',               'Google Form のID'],
-    ['NOTIFY_STAGES_DAYS',  '120,90,60,45,30,14,0', '通知するステージ（満了日までの日数）'],
+    ['NOTIFY_STAGES_DAYS',  '90,60,30,0', '通知するステージ（満了日までの日数）'],
     ['RUN_TIMEZONE',        'Asia/Tokyo',     'タイムゾーン'],
     ['ENABLE_SEND',         'false',          'メール送信有効化（trueで送信）'],
     ['GMAIL_DAILY_LIMIT',   '150',            'Gmail日次送信上限']

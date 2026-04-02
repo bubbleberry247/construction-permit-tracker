@@ -136,6 +136,7 @@ STYLE_VALID = {}
 STYLE_DOC_INCOMPLETE = {}
 STYLE_NOT_SUBMITTED = {"font": Font(color="999999", size=10)}
 STYLE_UNIDENTIFIED = {"font": Font(color="999999", size=10)}
+STYLE_NO_PERMIT = {"font": Font(color="999999", size=10), "fill": PatternFill("solid", fgColor="F2F2F2")}
 
 # 書類ステータス用スタイル
 FONT_DOC_COMPLETE = Font(bold=True, color="4CAF50", size=10)   # 9/9: 緑文字太字
@@ -466,6 +467,7 @@ def write_excel(
         "■書類不備  "
         "■未提出(グレー文字)  "
         "■未特定(グレー文字)  "
+        "■許可証なし(グレー背景)  "
         "■9/9提出(緑)  "
         "■不足あり(オレンジ)"
     )
@@ -554,15 +556,16 @@ def write_excel(
                 cid, None, under_review_cids,
                 companies_with_receipts, has_permit_page,
             )
+            no_permit_label = "許可証なし" if cid else ""
             trade_cols = [""] * 29
             row_data: list[Any] = (
                 [display_name, "", "", "", email_display,  # A-E
-                 "", "", "", ""]                            # F-I
+                 no_permit_label, "", "", ""]               # F-I
                 + trade_cols                                # J-AL
                 + ["", "", receipt_date, folder_path,       # AM-AP
                    status, doc_status, missing_text, ""]    # AQ-AT
             )
-            _write_row(ws, row_idx, row_data, status)
+            _write_row(ws, row_idx, row_data, status, no_permit=bool(cid))
             row_idx += 1
         else:
             # 許可情報ありの行（permit毎に1行）
@@ -624,6 +627,7 @@ def _write_row(
     row_idx: int,
     row_data: list[Any],
     status: str,
+    no_permit: bool = False,
 ) -> None:
     """1行分のデータをワークシートに書き込み、スタイルを適用。"""
     # ステータス別のスタイルを取得
@@ -636,7 +640,10 @@ def _write_row(
         "未提出": STYLE_NOT_SUBMITTED,
         "未特定": STYLE_UNIDENTIFIED,
     }
-    style = style_map.get(status, {})
+    if no_permit:
+        style = STYLE_NO_PERMIT
+    else:
+        style = style_map.get(status, {})
 
     for col_idx, val in enumerate(row_data, 1):
         cell = ws.cell(row=row_idx, column=col_idx, value=val)

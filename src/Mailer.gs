@@ -29,12 +29,12 @@ var Mailer = {
    */
   _getStageMessage: function(stage) {
     var messages = {
-      '150': '許可証の有効期限まで約150日となりました。更新手続きに必要な書類の準備を開始してください。',
-      '90':  '許可証の有効期限まで約90日です。更新申請の受付期間に入りましたので、申請手続きを開始してください。受付票（控え）の提出もお願いいたします。',
-      '30':  '【最終警告】許可証の有効期限まで約30日です。更新手続きが完了していない場合、発注・入場に影響が生じる可能性があります。至急ご対応ください。',
-      'EXPIRED': '許可証の有効期限が切れています。至急更新手続きをご確認ください。このまま更新が確認できない場合、発注・入場を停止させていただく場合があります。'
+      '90':  '許可証の有効期限まで約90日です。更新が完了しましたら、新しい許可証PDFをGoogleフォーム経由でご提出ください。',
+      '60':  '許可証の有効期限まで約60日です。更新手続きはお済みでしょうか。完了後は新しい許可証PDFをGoogleフォーム経由でご提出ください。',
+      '30':  '【要確認】許可証の有効期限まで約30日です。更新状況をご確認ください。更新済みの場合は、新しい許可証PDFをGoogleフォーム経由でご提出ください。',
+      'EXPIRED': '許可証の有効期限が過ぎています。更新済みの場合は、新しい許可証PDFを至急ご提出ください。未更新の場合は、発注・入場に影響が生じる可能性がありますのでご確認ください。'
     };
-    return messages[String(stage)] || '許可証の更新についてご確認ください。';
+    return messages[String(stage)] || '許可証の更新状況をご確認ください。更新済みの場合は、新しい許可証PDFをGoogleフォーム経由でご提出ください。';
   },
 
   /**
@@ -156,7 +156,7 @@ var Mailer = {
     var subject = '【受領確認】建設業許可証を受領しました（' + (company.company_name_normalized || company.company_name_raw) + '）';
 
     // 次回通知予定ステージを算出
-    var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '150,90,30';
+    var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '90,60,30';
     var stageDays = stagesStr.split(',').map(function(s) { return parseInt(s.trim(), 10); })
                              .filter(function(n) { return !isNaN(n); })
                              .sort(function(a, b) { return b - a; });
@@ -242,9 +242,9 @@ var Mailer = {
   },
 
   /**
-   * 週次サマリーメールを ADMIN_EMAILS に送信する
+   * 月次サマリーメールを ADMIN_EMAILS に送信する
    */
-  sendWeeklySummary: function() {
+  sendMonthlySummary: function() {
     var adminEmails = getConfig('ADMIN_EMAILS');
     var enableSend = getConfig('ENABLE_SEND');
     if (!adminEmails) return;
@@ -252,18 +252,18 @@ var Mailer = {
     var permits = PermitsModel.getAllActive();
     var today = new Date();
 
-    // 180日以内の許可証を抽出（150日通知に合わせてバッファ）
+    // 90日以内の許可証を抽出
     var nearExpiry = permits.filter(function(p) {
       var d = daysUntil(p.expiry_date);
-      return !isNaN(d) && d <= 180;
+      return !isNaN(d) && d <= 90;
     }).sort(function(a, b) {
       return daysUntil(a.expiry_date) - daysUntil(b.expiry_date);
     });
 
-    var subject = '【週次レポート】建設業許可 期限接近一覧';
+    var subject = '【月次レポート】建設業許可 期限接近一覧';
 
     var lines = [
-      '■ 期限120日以内の許可証一覧',
+      '■ 期限90日以内の許可証一覧',
       '集計日: ' + formatDate(today, 'yyyy/MM/dd'),
       '件数: ' + nearExpiry.length + '件',
       '',
@@ -284,6 +284,8 @@ var Mailer = {
 
     var body = lines.join('\n');
 
+    body += '\n\n■ ご対応のお願い\n更新が完了した業者様には、新しい許可証PDFをGoogleフォーム経由でご提出いただくようご案内ください。';
+
     if (enableSend === 'false') return;
 
     var recipients = adminEmails.split(',').map(function(e) { return e.trim(); }).filter(Boolean);
@@ -292,7 +294,7 @@ var Mailer = {
         cc: recipients.slice(1).join(',') || undefined
       });
     } catch (err) {
-      logError('sendWeeklySummary 送信エラー', err);
+      logError('sendMonthlySummary 送信エラー', err);
     }
   }
 };

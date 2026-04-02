@@ -15,7 +15,7 @@ function runDailyNotifications() {
   }
   try {
     // 1. NOTIFY_STAGES_DAYS を配列に変換
-    var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '120,90,60,45,30,14,0';
+    var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '90,60,30,0';
     var stageDays = stagesStr.split(',').map(function(s) {
       return parseInt(s.trim(), 10);
     }).filter(function(n) { return !isNaN(n); }).sort(function(a, b) { return b - a; });
@@ -38,9 +38,9 @@ function runDailyNotifications() {
       logError('CompanyView更新エラー', err);
     }
 
-    // 5. 月曜のみ週次サマリー送信
-    if (isTodayDayOfWeek(1)) {
-      Mailer.sendWeeklySummary();
+    // 5. 毎月1日に月次サマリー送信
+    if (new Date().getDate() === 1) {
+      Mailer.sendMonthlySummary();
     }
 
   } catch (err) {
