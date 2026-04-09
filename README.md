@@ -162,3 +162,22 @@ notification_id	sent_at	company_id	permit_id	to_email	cc_email	stage	subject	bod
 - **トリガーが実行されない**: Apps Script の「トリガー」画面で runDailyNotifications の設定を確認してください
 - **DriveApp.getFileById エラー**: フォームのファイルアップロード権限とDriveのアクセス権を確認してください
 - **onFormSubmit が動作しない**: トリガーがフォーム送信時に設定されているか確認。Apps Script のダッシュボードで実行ログを確認してください
+
+---
+
+## ディレクトリ構成
+
+<!-- AUTO-GENERATED: directory table -->
+| ディレクトリ | README | 概要 |
+|-------------|--------|------|
+| [`src/`](src/README.md) | [README](src/README.md) | バックエンドPythonコード一式（パイプライン・GAS・FastAPI） |
+| [`src/app/`](src/app/README.md) | [README](src/app/README.md) | FastAPI Webダッシュボード（ルーター・テンプレート・静的ファイル） |
+| [`src/app/routers/`](src/app/routers/README.md) | [README](src/app/routers/README.md) | FastAPI ルーター群（companies / dashboard / images / pages） |
+| [`src/utils/`](src/utils/README.md) | [README](src/utils/README.md) | 共通ユーティリティ（OCR後処理・日本語正規化・和暦変換） |
+| [`tests/`](tests/README.md) | [README](tests/README.md) | ユニットテスト・OCRベンチマーク |
+| [`docs/`](docs/README.md) | [README](docs/README.md) | システム設計・運用ルールドキュメント |
+| [`plans/`](plans/README.md) | [README](plans/README.md) | AIレビュー依頼・設計提案・修正計画 |
+| [`policy/`](policy/README.md) | [README](policy/README.md) | マスタデータ不変条件定義（機械可読ポリシー） |
+| [`scripts/`](scripts/README.md) | [README](scripts/README.md) | Windowsタスクスケジューラ・パイプライン実行バッチ |
+| `logs/` | — | MCP Puppeteer 実行ログ（自動生成・コミット対象外） |
+<!-- END AUTO-GENERATED -->
