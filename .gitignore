@@ -25,3 +25,5 @@ tests/ocr_benchmark_results*.csv
 
 # 内部計画ドキュメント
 plans/
+.aidesigner/*
+!.aidesigner/.gitkeep

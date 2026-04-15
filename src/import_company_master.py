@@ -183,7 +183,7 @@ def load_xlsx(xlsx_path: Path) -> list[dict[str, Any]]:
 
             records.append(
                 {
-                    "company_id": str(uuid.uuid4()),
+                    "company_id": "",  # C####形式で後から採番（Sheets登録時 or TSV生成時）
                     "company_name_raw": company_raw,
                     "company_name_normalized": normalize_company_name(company_raw),
                     "representative_name": representative,
@@ -352,6 +352,22 @@ def main() -> None:
     if not records:
         logger.warning("インポート対象レコードが 0 件です。終了します。")
         return
+
+    # company_id をC####形式で採番（空のレコードに対して連番を振る）
+    max_num = 0
+    for rec in records:
+        cid = rec.get("company_id", "")
+        if cid and cid.startswith("C"):
+            try:
+                n = int(cid[1:])
+                if n > max_num:
+                    max_num = n
+            except ValueError:
+                pass
+    for rec in records:
+        if not rec.get("company_id"):
+            max_num += 1
+            rec["company_id"] = f"C{max_num:04d}"
 
     # 3. dry-run
     if args.dry_run:

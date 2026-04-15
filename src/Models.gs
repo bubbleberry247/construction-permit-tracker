@@ -165,7 +165,7 @@ var CompaniesModel = {
   create: function(data) {
     var sheet = this.getSheet();
     var now = new Date();
-    data.company_id = data.company_id || generateUuid();
+    data.company_id = data.company_id || getNextCompanyId_();
     data.status = data.status || 'ACTIVE';
     data.created_at = now;
     data.updated_at = now;

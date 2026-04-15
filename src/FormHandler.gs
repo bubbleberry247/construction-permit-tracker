@@ -106,14 +106,11 @@ function onFormSubmit(e) {
     }
     var company = CompaniesModel.findByNormalizedName(normalizedName);
     if (!company) {
-      company = CompaniesModel.create({
-        company_name_raw:        companyNameRaw,
-        company_name_normalized: normalizedName,
-        contact_person:          contactPerson,
-        contact_email:           contactEmail,
-        contact_email_cc:        '',
-        status:                  'ACTIVE'
-      });
+      // 教師データ（145社）がマスタ。未登録会社の自動作成は禁止。
+      // AuditLogに記録してエラーを返す。
+      writeAuditLog_('system', 'COMPANY_NOT_FOUND', 'FormHandler', '',
+        'name=' + companyNameRaw + ' email=' + contactEmail);
+      throw new Error('会社が登録されていません: 「' + companyNameRaw + '」。管理者にCompaniesシートへの登録を依頼してください。');
     }
     var companyId = company.company_id;
 
