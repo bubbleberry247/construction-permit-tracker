@@ -106,6 +106,48 @@ def load_companies(db_path: Path) -> list[CompanyRecord]:
     return [CompanyRecord(r["company_id"], r["official_name"]) for r in rows]
 
 
+def load_email_company_map(db_path: Path) -> dict[str, tuple[str, str]]:
+    """company_emails から email(lower) -> (company_id, official_name) を構築"""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """SELECT ce.email, c.company_id, c.official_name
+           FROM company_emails ce
+           JOIN companies c ON c.company_id = ce.company_id"""
+    ).fetchall()
+    conn.close()
+    return {r["email"].lower(): (r["company_id"], r["official_name"]) for r in rows}
+
+
+def load_inbox_file_to_sender(log_path: Path) -> dict[str, str]:
+    """inbound_log.csv から inbox ファイル名(basename) -> 送信者メール の dict を構築。
+       sender_email が shinsei.tic の場合は original_sender_email を採用。"""
+    mapping: dict[str, str] = {}
+    if not log_path.exists():
+        return mapping
+    with log_path.open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            saved_path = (row.get("saved_path") or "").strip()
+            if not saved_path:
+                continue
+            basename = Path(saved_path).name
+            sender = (row.get("sender_email") or "").strip()
+            original = (row.get("original_sender_email") or "").strip()
+            # shinsei.tic 経由の場合は original 優先
+            if "shinsei.tic" in sender.lower() and original and "shinsei.tic" not in original.lower():
+                chosen = original
+            else:
+                chosen = sender or original
+            # <email> 形式を除去
+            m = re.search(r"<([^>]+)>", chosen)
+            if m:
+                chosen = m.group(1)
+            if basename and chosen:
+                mapping[basename] = chosen.lower()
+    return mapping
+
+
 # ---------------------------------------------------------------------------
 # 企業名抽出 (ファイル名から)
 # ---------------------------------------------------------------------------
@@ -300,16 +342,40 @@ def _should_skip_file(name: str) -> bool:
 
 
 def _decode_zip_filename(info: zipfile.ZipInfo) -> str:
-    """ZIP内ファイル名を正しくデコード（cp932 フォールバック）"""
+    """ZIP内ファイル名を正しくデコード（cp932 フォールバック）
+
+    Python zipfile は ZIP 内の 0x5C をパス区切り 0x2F に正規化するため、
+    cp932 の「表」(0x95 0x5C) など第2バイトが 0x5C の文字が壊れる。
+    lead byte 直後の 0x2F を 0x5C に復元してから cp932 デコードする。
+    """
     if info.flag_bits & 0x800:
-        # UTF-8 フラグ
         return info.filename
     try:
-        # Python の zipfile は cp437 でデコードするが、日本語Windowsは cp932
         raw = info.filename.encode("cp437")
-        return raw.decode("cp932")
-    except (UnicodeDecodeError, UnicodeEncodeError):
+    except UnicodeEncodeError:
         return info.filename
+
+    try:
+        return raw.decode("cp932")
+    except UnicodeDecodeError:
+        pass
+
+    fixed = bytearray()
+    i = 0
+    while i < len(raw):
+        b = raw[i]
+        is_lead = (0x81 <= b <= 0x9F) or (0xE0 <= b <= 0xFC)
+        if is_lead and i + 1 < len(raw) and raw[i + 1] == 0x2F:
+            fixed.append(b)
+            fixed.append(0x5C)
+            i += 2
+        else:
+            fixed.append(b)
+            i += 1
+    try:
+        return bytes(fixed).decode("cp932")
+    except UnicodeDecodeError:
+        return raw.decode("cp932", errors="replace")
 
 
 def extract_zip(
@@ -559,6 +625,13 @@ def run_extraction(
     companies = load_companies(db_path)
     logger.info("企業マスタ: %d社ロード済み", len(companies))
 
+    # 送信者メール経路の補助マップ
+    email_to_company = load_email_company_map(db_path)
+    log_path = _PROJECT_ROOT / "logs" / "inbound_log.csv"
+    inbox_to_sender = load_inbox_file_to_sender(log_path)
+    logger.info("company_emails: %d件 / inbox→sender: %d件",
+                len(email_to_company), len(inbox_to_sender))
+
     # originals ハッシュセット構築
     logger.info("originals/ ハッシュセット構築中...")
     originals_hashes = build_originals_hash_set(originals_dir)
@@ -598,6 +671,17 @@ def run_extraction(
                 company = match_company(inner_hint, companies)
                 if company.company_id != "UNKNOWN":
                     logger.info("  ZIP内ファイル名からマッチ: %s → %s", inner_hint, company.company_id)
+
+        # 送信者メール経路 fallback: inbound_log.csv → company_emails
+        if company.company_id == "UNKNOWN":
+            sender = inbox_to_sender.get(source_name)
+            if sender:
+                hit = email_to_company.get(sender)
+                if hit:
+                    cid, cname = hit
+                    company = CompanyMatch(cid, cname, "MEDIUM")
+                    logger.info("  送信者メール経路でマッチ: %s → %s %s",
+                                sender, cid, cname)
 
         logger.info(
             "  企業マッチ: %s (%s) [%s]",

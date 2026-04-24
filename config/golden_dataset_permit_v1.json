@@ -1,0 +1,128 @@
+[
+  {
+    "id": 1,
+    "filename": "Gテリア建設業許可_R10.4.8まで.pdf",
+    "vendor": "Gテリア株式会社",
+    "issue_date": "2023-04-09",
+    "invoice_number": "24944",
+    "expiry_date": "2028-04-08",
+    "category": "permit"
+  },
+  {
+    "id": 2,
+    "filename": "あかり電工社_(株)あかり_建設業許可_20240710.pdf",
+    "vendor": "株式会社あかり電工社",
+    "issue_date": "2024-07-10",
+    "invoice_number": "74978",
+    "expiry_date": "2029-07-09",
+    "category": "permit"
+  },
+  {
+    "id": 3,
+    "filename": "スズキ_建設業許可証R11.12.27.pdf",
+    "vendor": "株式会社スズキ",
+    "issue_date": "",
+    "invoice_number": "",
+    "expiry_date": "",
+    "category": "permit"
+  },
+  {
+    "id": 4,
+    "filename": "ナカミツホームテック_建設業許可証.pdf",
+    "vendor": "ナカミツホームテック",
+    "issue_date": "2026-01-04",
+    "invoice_number": "54893",
+    "expiry_date": "2031-01-03",
+    "category": "permit"
+  },
+  {
+    "id": 5,
+    "filename": "三信建材工業株式会社_建設業許可証（R4.3.8～R9.3.7）.pdf",
+    "vendor": "三信建材工業株式会社",
+    "issue_date": "2022-09-27",
+    "invoice_number": "14569",
+    "expiry_date": "2027-12-23",
+    "category": "permit"
+  },
+  {
+    "id": 6,
+    "filename": "名西建材株式会社_建設業許可証（R4.3.8～R9.3.7）.pdf",
+    "vendor": "名西建材株式会社",
+    "issue_date": "2022-03-08",
+    "invoice_number": "35496",
+    "expiry_date": "2027-03-07",
+    "category": "permit"
+  },
+  {
+    "id": 7,
+    "filename": "大嶽安城_3.1 建設業許可証.pdf",
+    "vendor": "株式会社大嶽安城",
+    "issue_date": "2025-03-20",
+    "invoice_number": "12009",
+    "expiry_date": "2030-03-19",
+    "category": "permit"
+  },
+  {
+    "id": 8,
+    "filename": "太田商事_3.建設業許可証(令和3～8）.pdf",
+    "vendor": "太田商事株式会社",
+    "issue_date": "2021-10-20",
+    "invoice_number": "1152",
+    "expiry_date": "2026-10-19",
+    "category": "permit"
+  },
+  {
+    "id": 9,
+    "filename": "日建工業_建設業許可証（日建）.pdf",
+    "vendor": "日建工業株式会社",
+    "issue_date": "2021-10-12",
+    "invoice_number": "18744",
+    "expiry_date": "2026-10-11",
+    "category": "permit"
+  },
+  {
+    "id": 10,
+    "filename": "有限会社YAMAJIパーティション_建設業許可.pdf",
+    "vendor": "有限会社YAMAJIパーティション",
+    "issue_date": "2023-03-14",
+    "invoice_number": "68116",
+    "expiry_date": "2028-03-13",
+    "category": "permit"
+  },
+  {
+    "id": 11,
+    "filename": "株式会社しごとラボ_建設業許可_1.pdf",
+    "vendor": "株式会社しごとラボ",
+    "issue_date": "",
+    "invoice_number": "",
+    "expiry_date": "",
+    "category": "permit"
+  },
+  {
+    "id": 12,
+    "filename": "株式会社インフラテック_A1._建設業許可通知書 R03.04.07～R08.04.06.pdf",
+    "vendor": "",
+    "issue_date": "",
+    "invoice_number": "",
+    "expiry_date": "",
+    "category": "permit"
+  },
+  {
+    "id": 13,
+    "filename": "株式会社フォースター_ﾌｫｰｽﾀｰ：建設業許可証 般-5第106850号.pdf",
+    "vendor": "株式会社フォースター",
+    "issue_date": "2023-07-17",
+    "invoice_number": "106850",
+    "expiry_date": "2028-07-16",
+    "category": "permit"
+  },
+  {
+    "id": 14,
+    "filename": "谷野宮組_建設業許可証（谷野宮組）.pdf",
+    "vendor": "株式会社谷野宮組",
+    "issue_date": "2021-04-14",
+    "invoice_number": "45231",
+    "expiry_date": "2026-04-13",
+    "category": "permit"
+  }
+]

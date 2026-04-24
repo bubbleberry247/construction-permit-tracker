@@ -27,3 +27,7 @@ tests/ocr_benchmark_results*.csv
 plans/
 .aidesigner/*
 !.aidesigner/.gitkeep
+
+# ローカル設定・ツールキャッシュ
+.claude/settings.local.json
+.playwright-mcp/
