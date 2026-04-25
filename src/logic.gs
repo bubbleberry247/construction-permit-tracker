@@ -208,28 +208,49 @@ function searchMlit_(formData) {
   if (!/^\d+$/.test(permitNumber)) throw new Error('許可番号は数字のみで入力してください');
 
   // レート制限: 機能横断 wrapper 経由（MlitRateLimit.gs:withMlitRateLimit_）
-  // 旧実装の ScriptCache 個別 3秒チェックは rolling など他経路と独立で並走規約違反の
-  // リスクがあったため、ScriptProperties 共有予約スロット方式に統一した。
-  // wrapper が必要な sleep を内部で行うので、エラーで弾くのではなく自動待機する。
+  // ユーザー対面のため maxWaitMs=7000ms の **バックプレッシャー** を入れる。
+  // 3 秒間隔の予約スロットなので、待機予約は 0/3000/6000/9000ms... と並ぶ。
+  // 7秒上限により「直近 2 件以内なら待たせて成功、3 件目以降は即 QUEUE_FULL」となる。
+  // ・1 人連続: 2 件までは数秒待機で成功。3 件目で「混雑中」エラー（ユーザーに即返答）。
+  // ・2 人同時 or rolling 並走: 1 件は通り、もう 1 件は数秒待機で成功。
+  // 旧実装は ScriptCache で個別 3秒間隔チェック → エラー返却だったが、機能横断の
+  // 共有予約スロットに統一しつつ、UI 体感としては従来同様の即フィードバックを維持する。
+  var SEARCH_MAX_WAIT_MS = 7000;
   var licenseNoKbn = getLicenseNoKbn_(authority);
   var prefCode = getPrefCode_(authority);
 
-  var candidates = withMlitRateLimit_(function() {
-    return searchMlitPermit_(licenseNoKbn, permitNumber, prefCode);
-  });
+  var candidates;
+  try {
+    candidates = withMlitRateLimit_(function() {
+      return searchMlitPermit_(licenseNoKbn, permitNumber, prefCode);
+    }, { maxWaitMs: SEARCH_MAX_WAIT_MS });
+  } catch (e) {
+    if (String(e.message || '').indexOf('MLIT_QUEUE_FULL') === 0) {
+      throw new Error('MLIT 検索が混雑しています。少し時間をおいてから再度お試しください。');
+    }
+    throw e;
+  }
 
   // 候補なし
   if (!candidates || candidates.length === 0) {
     return { found: false, error: 'NOT_FOUND', candidates: [] };
   }
 
-  // 各候補の詳細を取得（こちらも rate limit wrapper 経由）
+  // 各候補の詳細を取得（同じくバックプレッシャー付き wrapper 経由）
   var details = [];
   for (var i = 0; i < candidates.length; i++) {
     var svLicenseNo = candidates[i];
-    var detail = withMlitRateLimit_(function() {
-      return fetchMlitDetail_(svLicenseNo);
-    });
+    var detail;
+    try {
+      detail = withMlitRateLimit_(function() {
+        return fetchMlitDetail_(svLicenseNo);
+      }, { maxWaitMs: SEARCH_MAX_WAIT_MS });
+    } catch (e) {
+      if (String(e.message || '').indexOf('MLIT_QUEUE_FULL') === 0) {
+        throw new Error('MLIT 詳細取得が混雑しています。少し時間をおいてから再度お試しください。');
+      }
+      throw e;
+    }
 
     if (detail) {
       detail.permitAuthority = authority;

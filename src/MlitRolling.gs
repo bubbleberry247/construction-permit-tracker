@@ -178,14 +178,18 @@ function refreshOneMlitPermit_(permit) {
   var licenseNoKbn = getLicenseNoKbn_(authority);
   var prefCode = getPrefCode_(authority);
 
+  // バックグラウンド処理なのでユーザー対面より長めに待つが、無制限はダメ。
+  // 30 秒超 = 既に 10 件以上が前にある = MLIT_QUEUE_FULL で諦め、次回 stale 再試行。
+  var ROLLING_MAX_WAIT_MS = 30000;
+
   // 検索 API
   var candidates;
   try {
     candidates = withMlitRateLimit_(function() {
       return searchMlitPermit_(licenseNoKbn, permitNumber, prefCode);
-    });
+    }, { maxWaitMs: ROLLING_MAX_WAIT_MS });
   } catch (e) {
-    // 一時障害扱い: fetch_status は据え置き、last_synced だけ更新
+    // 一時障害扱い（QUEUE_FULL も含む）: fetch_status は据え置き、last_synced だけ更新
     updateLastSyncedOnly();
     return { result: '確認不可', message: 'searchMlitPermit_ error: ' + e.message };
   }
@@ -206,9 +210,9 @@ function refreshOneMlitPermit_(permit) {
   try {
     detail = withMlitRateLimit_(function() {
       return fetchMlitDetail_(candidates[0]);
-    });
+    }, { maxWaitMs: ROLLING_MAX_WAIT_MS });
   } catch (e) {
-    // 一時障害扱い
+    // 一時障害扱い（QUEUE_FULL も含む）
     updateLastSyncedOnly();
     return { result: '確認不可', message: 'fetchMlitDetail_ error: ' + e.message };
   }

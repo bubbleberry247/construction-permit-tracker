@@ -1,0 +1,20 @@
+# Files clasp should NOT upload to Apps Script.
+# rootDir is "src" but src/app/ contains FastAPI (Python + Jinja2 templates) that
+# should never go to GAS. Patterns relative to rootDir = src/.
+
+# FastAPI app under src/app/ (Python + Jinja2)
+app/**
+**/app/**
+**/templates/**
+
+# Python sources at src/ root level
+*.py
+**/*.py
+__pycache__/**
+**/__pycache__/**
+
+# Local-only artifacts (under rootDir)
+**/.venv/**
+**/*.pyc
+**/*.pyo
+**/*.log
