@@ -93,8 +93,7 @@ def get_company(company_id: str):
     try:
         # Company
         comp = conn.execute(
-            "SELECT company_id, official_name, status, mlit_status, last_confirmed_at "
-            "FROM companies WHERE company_id = ?",
+            "SELECT company_id, official_name, status FROM companies WHERE company_id = ?",
             (company_id,),
         ).fetchone()
         if comp is None:

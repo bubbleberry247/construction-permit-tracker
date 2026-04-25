@@ -207,35 +207,29 @@ function searchMlit_(formData) {
   if (!permitNumber) throw new Error('許可番号を入力してください');
   if (!/^\d+$/.test(permitNumber)) throw new Error('許可番号は数字のみで入力してください');
 
-  // レート制限（3秒）
-  var cache = CacheService.getScriptCache();
-  var lastCall = cache.get('mlit_last_call');
-  if (lastCall) {
-    var elapsed = Date.now() - Number(lastCall);
-    if (elapsed < 3000) {
-      throw new Error('連続検索は3秒以上間隔を空けてください（残り' + Math.ceil((3000 - elapsed) / 1000) + '秒）');
-    }
-  }
-
-  // MLIT検索
+  // レート制限: 機能横断 wrapper 経由（MlitRateLimit.gs:withMlitRateLimit_）
+  // 旧実装の ScriptCache 個別 3秒チェックは rolling など他経路と独立で並走規約違反の
+  // リスクがあったため、ScriptProperties 共有予約スロット方式に統一した。
+  // wrapper が必要な sleep を内部で行うので、エラーで弾くのではなく自動待機する。
   var licenseNoKbn = getLicenseNoKbn_(authority);
   var prefCode = getPrefCode_(authority);
-  var candidates = searchMlitPermit_(licenseNoKbn, permitNumber, prefCode);
 
-  // キャッシュ更新
-  cache.put('mlit_last_call', String(Date.now()), 10);
+  var candidates = withMlitRateLimit_(function() {
+    return searchMlitPermit_(licenseNoKbn, permitNumber, prefCode);
+  });
 
   // 候補なし
   if (!candidates || candidates.length === 0) {
     return { found: false, error: 'NOT_FOUND', candidates: [] };
   }
 
-  // 各候補の詳細を取得
+  // 各候補の詳細を取得（こちらも rate limit wrapper 経由）
   var details = [];
   for (var i = 0; i < candidates.length; i++) {
-    if (i > 0) Utilities.sleep(1000);
-    var detail = fetchMlitDetail_(candidates[i]);
-    cache.put('mlit_last_call', String(Date.now()), 10);
+    var svLicenseNo = candidates[i];
+    var detail = withMlitRateLimit_(function() {
+      return fetchMlitDetail_(svLicenseNo);
+    });
 
     if (detail) {
       detail.permitAuthority = authority;

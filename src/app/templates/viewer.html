@@ -369,23 +369,7 @@ function updatePanel() {
 
     // Company
     html += '<div class="panel-section"><h3>会社名</h3>';
-    html += '<div class="panel-value">' + comp.company_id + ' ' + comp.official_name + '</div>';
-    // MLIT 状態 + 最新化ボタン
-    const mlitStatus = comp.mlit_status || 'NOT_CONFIRMED';
-    const lastConfirmed = comp.last_confirmed_at || '未確認';
-    const statusColor = mlitStatus === 'CONFIRMED' ? '#4CAF50'
-        : mlitStatus === 'MISMATCH' ? '#f44336'
-        : mlitStatus === 'ERROR' ? '#ff9800'
-        : '#888';
-    html += '<div style="margin-top:6px;font-size:11px;color:#aaa;">';
-    html += 'MLIT: <span style="color:' + statusColor + ';font-weight:bold;">' + mlitStatus + '</span>';
-    html += ' &nbsp; 最終確認: ' + lastConfirmed;
-    html += '</div>';
-    html += '<div style="margin-top:6px;">';
-    html += '<button class="rot-btn" id="mlit-refresh-btn" onclick="mlitRefreshOne()" style="background:#9C27B0;border-color:#9C27B0;font-size:11px;width:100%;" title="国土交通省サイトに問い合わせて最新の許可情報を取得（約15秒）">🔄 MLITで最新化（15秒）</button>';
-    html += '</div>';
-    html += '<div id="mlit-refresh-status" style="font-size:10px;color:#888;margin-top:4px;text-align:right;"></div>';
-    html += '</div>';
+    html += '<div class="panel-value">' + comp.company_id + ' ' + comp.official_name + '</div></div>';
 
     // Page info
     html += '<div class="panel-section"><h3>ページ</h3>';
