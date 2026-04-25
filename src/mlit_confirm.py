@@ -2,15 +2,18 @@
 mlit_confirm.py — MLIT etsuran2 で許可証の現在状態を確認し、スクリーンショットを保存する。
 
 Usage:
-    python src/mlit_confirm.py                    # Google Sheets からアクティブ permit を取得して全件確認
-    python src/mlit_confirm.py --csv path/to.csv  # 特定の staging CSV から対象を取得
-    python src/mlit_confirm.py --master           # company_master.csv から確認対象を取得
-    python src/mlit_confirm.py --master --all     # CONFIRMED 含め全件を確認対象にする
-    python src/mlit_confirm.py --dry-run          # URL生成のみ（Playwright非実行）
+    python src/mlit_confirm.py                              # Google Sheets からアクティブ permit を取得して全件確認
+    python src/mlit_confirm.py --csv path/to.csv            # 特定の staging CSV から対象を取得
+    python src/mlit_confirm.py --master                     # company_master.csv から確認対象を取得
+    python src/mlit_confirm.py --master --all               # CONFIRMED 含め全件を確認対象にする
+    python src/mlit_confirm.py --rolling                    # SQLite DB からローリング再確認対象を取得（毎晩バッチ向け）
+    python src/mlit_confirm.py --rolling --max-stale-days 30 --daily-limit 5
+    python src/mlit_confirm.py --dry-run                    # URL生成のみ（Playwright非実行）
 
 確認対象ステータス: EXPIRING / RENEWAL_OVERDUE / EXPIRED / RENEWAL_IN_PROGRESS
 
 注意: MLIT 一括取得は規約違反。1件ずつ 3秒ウェイトを入れること。
+kill switch: c:/tmp/mlit_pause が存在する場合は即時停止する。
 """
 
 from __future__ import annotations
@@ -19,10 +22,30 @@ import argparse
 import csv
 import json
 import logging
+import sqlite3
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# kill switch
+# ---------------------------------------------------------------------------
+
+KILL_SWITCH_PATH = Path(r"c:/tmp/mlit_pause")
+
+
+def is_paused() -> bool:
+    """kill switch ファイル存在チェック。True なら処理停止。"""
+    return KILL_SWITCH_PATH.exists()
+
+
+def check_kill_switch_or_exit() -> None:
+    """kill switch があれば即時 exit する。"""
+    if is_paused():
+        logger.error("MLIT 確認は一時停止中です（%s が存在）", KILL_SWITCH_PATH)
+        sys.exit(75)  # EX_TEMPFAIL
 
 # ---------------------------------------------------------------------------
 # 定数
@@ -215,6 +238,91 @@ def fetch_permits_from_master(
 
     logger.info("company_master.csv から取得: 合計 %d 行 → 確認対象 %d 件", total, len(permits))
     return permits
+
+
+def fetch_permits_from_db_rolling(
+    db_path: Path,
+    max_stale_days: int = 30,
+    daily_limit: int = 5,
+) -> list[dict[str, Any]]:
+    """
+    SQLite DB からローリング再確認対象を取得する。
+
+    対象優先順位:
+      1. mlit_status IS NULL or != CONFIRMED （未確認・不一致・エラー）
+      2. last_confirmed_at が max_stale_days 以上前のもの
+      3. last_confirmed_at が古いものから先に処理
+    daily_limit で1日の上限を制御（145社を巡回するため）。
+    """
+    if not db_path.exists():
+        logger.warning("DB が見つかりません: %s", db_path)
+        return []
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        # 1社1件に絞る（permit が複数ある場合は expiry_date 最新を1件採用）
+        sql = """
+            SELECT c.company_id, c.official_name, c.permit_number, c.permit_authority,
+                   c.mlit_status, c.last_confirmed_at,
+                   p.permit_id, p.permit_number AS p_num, p.permit_authority AS p_auth
+            FROM companies c
+            LEFT JOIN permits p
+              ON p.permit_id = (
+                  SELECT permit_id FROM permits
+                  WHERE company_id = c.company_id AND current_flag = 1
+                  ORDER BY expiry_date DESC, permit_id DESC LIMIT 1
+              )
+            WHERE c.status = 'ACTIVE'
+              AND (COALESCE(c.permit_number, '') != '' OR COALESCE(p.permit_number, '') != '')
+              AND (
+                c.mlit_status IS NULL
+                OR c.mlit_status != 'CONFIRMED'
+                OR c.last_confirmed_at IS NULL
+                OR datetime(c.last_confirmed_at) < datetime('now', ?, 'localtime')
+              )
+            ORDER BY
+              CASE WHEN c.mlit_status IS NULL OR c.mlit_status != 'CONFIRMED' THEN 0 ELSE 1 END,
+              COALESCE(c.last_confirmed_at, '1900-01-01') ASC
+            LIMIT ?
+        """
+        rows = conn.execute(sql, (f"-{max_stale_days} days", daily_limit)).fetchall()
+    finally:
+        conn.close()
+
+    permits: list[dict[str, Any]] = []
+    for r in rows:
+        permits.append({
+            "company_id": r["company_id"],
+            "company_name": r["official_name"],
+            "official_name": r["official_name"],
+            "permit_authority_name_normalized": (r["p_auth"] or r["permit_authority"] or "").strip(),
+            "contractor_number": (r["p_num"] or r["permit_number"] or "").strip(),
+            "permit_number_full": "",
+            "permit_id": str(r["permit_id"] or ""),
+        })
+
+    logger.info(
+        "DB rolling 取得: max_stale_days=%d daily_limit=%d → %d 件",
+        max_stale_days, daily_limit, len(permits),
+    )
+    return permits
+
+
+def update_db_company_mlit(db_path: Path, company_id: str, result: str) -> None:
+    """ローリング処理: companies.mlit_status / last_confirmed_at を更新。"""
+    status_map = {"一致": "CONFIRMED", "不一致": "MISMATCH", "確認不可": "ERROR"}
+    new_status = status_map.get(result, "ERROR")
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "UPDATE companies SET mlit_status=?, last_confirmed_at=datetime('now','localtime'), "
+            "updated_at=datetime('now','localtime') WHERE company_id=?",
+            (new_status, company_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -597,7 +705,13 @@ def main(
     dry_run: bool,
     master_mode: bool = False,
     include_all: bool = False,
+    rolling_mode: bool = False,
+    max_stale_days: int = 30,
+    daily_limit: int = 5,
 ) -> None:
+    # kill switch: 起動時チェック
+    check_kill_switch_or_exit()
+
     config = load_config()
     data_root = Path(config.get("DATA_ROOT", str(PROJECT_ROOT)))
     sheets_id: str = config.get("GOOGLE_SHEETS_ID", "")
@@ -605,11 +719,15 @@ def main(
     max_retries: int = int(config.get("RETRY_MAX", 3))
     base_delay: float = float(config.get("RETRY_BASE_DELAY_SEC", 1.0))
 
+    db_path = data_root / "data" / "permit_tracker.db"
+
     # 確認対象の取得
     permits: list[dict[str, Any]] = []
 
     if csv_path is not None:
         permits = fetch_permits_from_csv(csv_path)
+    elif rolling_mode:
+        permits = fetch_permits_from_db_rolling(db_path, max_stale_days, daily_limit)
     elif master_mode:
         master_csv = data_root / "output" / "company_master.csv"
         permits = fetch_permits_from_master(master_csv, include_all=include_all)
@@ -653,14 +771,21 @@ def main(
     pending_updates: list[tuple[int, str, str, str]] = []
 
     for i, permit in enumerate(permits):
+        # kill switch: ループ毎にチェック（途中停止可能）
+        if is_paused():
+            logger.warning("kill switch 検出: %d/%d で中断", i, len(permits))
+            break
+
         contractor_number = permit.get("contractor_number", "").strip()
         authority_normalized = permit.get("permit_authority_name_normalized", "").strip()
         permit_id = permit.get("permit_id", "").strip()
+        company_id_for_db = permit.get("company_id", "").strip()
 
         logger.info(
-            "[%d/%d] 確認開始: contractor_number=%s authority=%s",
+            "[%d/%d] 確認開始: company_id=%s contractor_number=%s authority=%s",
             i + 1,
             len(permits),
+            company_id_for_db,
             contractor_number,
             authority_normalized,
         )
@@ -713,6 +838,13 @@ def main(
             else:
                 logger.warning("permit_id が Sheets で見つかりません: %s", permit_id)
 
+        # rolling モード: companies テーブルを直接更新
+        if rolling_mode and company_id_for_db:
+            try:
+                update_db_company_mlit(db_path, company_id_for_db, confirm_result)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("DB 更新エラー (company_id=%s): %s", company_id_for_db, exc)
+
         if confirm_result in ("一致", "不一致"):
             success += 1
         else:
@@ -742,6 +874,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", help="URL 生成のみ（Playwright 非実行）")
     p.add_argument("--master", action="store_true", help="company_master.csv から確認対象を取得")
     p.add_argument("--all", dest="include_all", action="store_true", help="CONFIRMED 含め全件を確認対象にする")
+    p.add_argument("--rolling", action="store_true", help="SQLite DB から rolling 再確認対象を取得（毎晩バッチ向け）")
+    p.add_argument("--max-stale-days", dest="max_stale_days", type=int, default=30,
+                   help="rolling: last_confirmed_at がこの日数より古いものを再確認対象（既定: 30）")
+    p.add_argument("--daily-limit", dest="daily_limit", type=int, default=5,
+                   help="rolling: 1回の実行で処理する最大件数（既定: 5）")
     return p.parse_args()
 
 
@@ -752,4 +889,7 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         master_mode=args.master,
         include_all=args.include_all,
+        rolling_mode=args.rolling,
+        max_stale_days=args.max_stale_days,
+        daily_limit=args.daily_limit,
     )

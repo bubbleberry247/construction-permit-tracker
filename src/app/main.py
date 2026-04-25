@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
-from app.routers import companies, pages, images, dashboard
+from app.routers import companies, pages, images, dashboard, permits, review, mlit
 
 app = FastAPI(title="建設業許可証管理")
 
@@ -24,6 +24,9 @@ app.include_router(companies.router)
 app.include_router(pages.router)
 app.include_router(images.router)
 app.include_router(dashboard.router)
+app.include_router(permits.router)
+app.include_router(review.router)
+app.include_router(mlit.router)
 
 
 @app.get("/")

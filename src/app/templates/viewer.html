@@ -32,8 +32,39 @@ main { padding: 0 !important; height: calc(100vh - 48px); overflow: hidden; }
         <div id="nav-position">- / -社</div>
         <div class="info" id="page-count-info"></div>
         <div id="missing-docs" style="display:none;"></div>
+
+        <!-- 要確認キュー -->
+        <div id="review-queue-panel" style="margin-top:8px;padding:6px;background:#1e2b4d;border-radius:4px;border:1px solid #334;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <strong style="color:#ffc107;font-size:11px;">⚠ 要確認ページ</strong>
+                <span id="review-queue-count" style="font-size:10px;color:#aaa;">-</span>
+            </div>
+            <div style="display:flex;gap:4px;margin-top:4px;">
+                <button class="rot-btn" onclick="jumpNextReview()" style="background:#ffc107;border-color:#ffc107;color:#000;flex:1;font-size:11px;">➡ 次の要確認へ</button>
+                <button class="rot-btn" onclick="openReviewList()" style="flex:0.6;font-size:11px;">一覧</button>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;border-top:1px solid #334;padding-top:6px;">
+                <strong style="color:#7cd1ff;font-size:11px;">🔍 OCR不一致</strong>
+                <span id="ocr-mismatch-count" style="font-size:10px;color:#aaa;">-</span>
+            </div>
+            <div style="display:flex;gap:4px;margin-top:4px;">
+                <button class="rot-btn" onclick="jumpNextOcrMismatch()" style="background:#7cd1ff;border-color:#7cd1ff;color:#000;flex:1;font-size:11px;">➡ 次の不一致へ</button>
+                <button class="rot-btn" onclick="openOcrMismatchList()" style="flex:0.6;font-size:11px;">一覧</button>
+            </div>
+        </div>
     </div>
     <div id="thumb-list"></div>
+</div>
+
+<!-- 要確認一覧モーダル -->
+<div id="review-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:9999;" onclick="if(event.target===this)closeReviewModal()">
+    <div style="position:absolute;top:5%;left:50%;transform:translateX(-50%);width:85%;max-width:1100px;max-height:85vh;background:#16213e;border-radius:8px;padding:16px;overflow:auto;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:12px;">
+            <h2 style="color:#e94560;margin:0;">要確認ページ一覧</h2>
+            <button onclick="closeReviewModal()" class="rot-btn">✕ 閉じる</button>
+        </div>
+        <div id="review-modal-body" style="font-size:12px;color:#e0e0e0;"></div>
+    </div>
 </div>
 
 <!-- Center Pane: Image viewer -->
@@ -338,7 +369,23 @@ function updatePanel() {
 
     // Company
     html += '<div class="panel-section"><h3>会社名</h3>';
-    html += '<div class="panel-value">' + comp.company_id + ' ' + comp.official_name + '</div></div>';
+    html += '<div class="panel-value">' + comp.company_id + ' ' + comp.official_name + '</div>';
+    // MLIT 状態 + 最新化ボタン
+    const mlitStatus = comp.mlit_status || 'NOT_CONFIRMED';
+    const lastConfirmed = comp.last_confirmed_at || '未確認';
+    const statusColor = mlitStatus === 'CONFIRMED' ? '#4CAF50'
+        : mlitStatus === 'MISMATCH' ? '#f44336'
+        : mlitStatus === 'ERROR' ? '#ff9800'
+        : '#888';
+    html += '<div style="margin-top:6px;font-size:11px;color:#aaa;">';
+    html += 'MLIT: <span style="color:' + statusColor + ';font-weight:bold;">' + mlitStatus + '</span>';
+    html += ' &nbsp; 最終確認: ' + lastConfirmed;
+    html += '</div>';
+    html += '<div style="margin-top:6px;">';
+    html += '<button class="rot-btn" id="mlit-refresh-btn" onclick="mlitRefreshOne()" style="background:#9C27B0;border-color:#9C27B0;font-size:11px;width:100%;" title="国土交通省サイトに問い合わせて最新の許可情報を取得（約15秒）">🔄 MLITで最新化（15秒）</button>';
+    html += '</div>';
+    html += '<div id="mlit-refresh-status" style="font-size:10px;color:#888;margin-top:4px;text-align:right;"></div>';
+    html += '</div>';
 
     // Page info
     html += '<div class="panel-section"><h3>ページ</h3>';
@@ -379,23 +426,178 @@ function updatePanel() {
         html += '<div class="panel-value">' + pct + '%</div></div>';
     }
 
-    // Permit OCR data
-    if (permits.length > 0) {
-        html += '<div class="ocr-section"><h3>許可証OCRデータ</h3>';
-        permits.forEach(p => {
-            html += '<div class="ocr-field"><span class="ocr-label">許可番号</span><span class="ocr-value">' + (p.permit_number || '-') + '</span></div>';
-            html += '<div class="ocr-field"><span class="ocr-label">許可行政庁</span><span class="ocr-value">' + (p.permit_authority || '-') + '</span></div>';
-            html += '<div class="ocr-field"><span class="ocr-label">区分</span><span class="ocr-value">' + (p.permit_category || '-') + '</span></div>';
-            html += '<div class="ocr-field"><span class="ocr-label">許可年</span><span class="ocr-value">' + (p.permit_year || '-') + '</span></div>';
-            html += '<div class="ocr-field"><span class="ocr-label">発行日</span><span class="ocr-value">' + (p.issue_date || '-') + '</span></div>';
-            html += '<div class="ocr-field"><span class="ocr-label">有効期限</span><span class="ocr-value">' + (p.expiry_date || '-') + '</span></div>';
-            html += '<div class="ocr-field"><span class="ocr-label">業種</span><span class="ocr-value" style="font-size:11px;">' + (p.trade_names || '-') + '</span></div>';
-            html += '<hr style="border-color:#333;margin:8px 0;">';
-        });
+    // Permit OCR data（編集可能な入力欄）
+    html += '<div class="ocr-section"><h3>許可証OCRデータ（編集可）</h3>';
+    if (permits.length === 0) {
+        html += '<div style="padding:12px;background:#0f1629;border-radius:4px;color:#aaa;text-align:center;">';
+        html += '<div style="margin-bottom:8px;font-size:11px;">この会社には許可証レコードがまだ登録されていません。</div>';
+        html += '<button class="rot-btn" onclick="createPermit()" style="background:#ff9800;border-color:#ff9800;font-size:12px;">＋ 新規許可証を追加</button>';
+        html += '<button class="rot-btn" onclick="openMlitByCompany()" style="background:#2196F3;border-color:#2196F3;font-size:12px;margin-left:6px;">🔍 MLITで検索</button>';
         html += '</div>';
     }
+    if (permits.length > 0) {
+        permits.forEach(p => {
+            const pid = p.permit_id;
+            const inputStyle = 'flex:1;background:#1a1a2e;color:#e0e0e0;border:1px solid #334;padding:3px 6px;font-size:11px;border-radius:3px;';
+            html += '<div class="permit-edit" data-pid="' + pid + '" style="padding:8px;background:#0f1629;border-radius:4px;margin-bottom:10px;">';
+            html += '<div class="ocr-field"><span class="ocr-label">許可番号</span><input type="text" id="pf_' + pid + '_number" value="' + escAttr(p.permit_number) + '" style="' + inputStyle + '"></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">行政庁</span><input type="text" id="pf_' + pid + '_authority" value="' + escAttr(p.permit_authority) + '" style="' + inputStyle + '"></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">区分</span><select id="pf_' + pid + '_category" style="' + inputStyle + '">';
+            ['', '一般', '特定'].forEach(v => {
+                html += '<option value="' + v + '"' + (v === (p.permit_category || '') ? ' selected' : '') + '>' + (v || '（未設定）') + '</option>';
+            });
+            html += '</select></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">許可年</span><input type="text" id="pf_' + pid + '_year" value="' + escAttr(p.permit_year) + '" style="' + inputStyle + '"></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">発行日</span><input type="date" id="pf_' + pid + '_issue" value="' + escAttr(p.issue_date) + '" style="' + inputStyle + '"></div>';
+            html += '<div class="ocr-field"><span class="ocr-label">有効期限</span><input type="date" id="pf_' + pid + '_expiry" value="' + escAttr(p.expiry_date) + '" style="' + inputStyle + '"></div>';
+            html += '<div class="ocr-field" style="align-items:flex-start;"><span class="ocr-label" style="margin-top:3px;">業種</span><textarea id="pf_' + pid + '_trades" rows="3" style="' + inputStyle + 'resize:vertical;">' + escAttr(p.trade_names) + '</textarea></div>';
+            html += '<div style="display:flex;gap:6px;margin-top:8px;">';
+            html += '<button class="rot-btn" onclick="savePermit(' + pid + ')" style="background:#4CAF50;border-color:#4CAF50;flex:1;">💾 保存</button>';
+            html += '<button class="rot-btn" onclick="openMlit(' + pid + ')" style="background:#2196F3;border-color:#2196F3;flex:1;" title="国土交通省検索システムで確認">🔍 MLIT確認</button>';
+            html += '</div>';
+            html += '<div id="pf_' + pid + '_status" style="font-size:10px;color:#888;margin-top:4px;text-align:right;"></div>';
+            html += '</div>';
+        });
+    }
+    html += '</div>';  // ocr-section 終了
 
     document.getElementById('panel-content').innerHTML = html;
+}
+
+async function createPermit() {
+    if (!companyData) return;
+    try {
+        const resp = await fetch('/api/permits', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_id: companyData.company.company_id }),
+        });
+        if (resp.ok) {
+            const newPermit = await resp.json();
+            companyData.permits = companyData.permits || [];
+            companyData.permits.push(newPermit);
+            updatePanel();
+        } else {
+            alert('許可証作成失敗: ' + resp.status);
+        }
+    } catch (e) {
+        alert('許可証作成エラー: ' + e.message);
+    }
+}
+
+async function openMlitByCompany() {
+    if (!companyData) return;
+    const url = 'https://etsuran2.mlit.go.jp/TAKKEN/kensetsuKensaku.do';
+    window.open(url, '_blank');
+    const hint = '会社名: ' + companyData.company.official_name;
+    try {
+        await navigator.clipboard.writeText(hint);
+        alert('MLIT検索ページを開きました。\nクリップボードに会社名をコピー:\n' + hint);
+    } catch (e) {
+        alert('MLIT検索ページを開きました。\n会社名で検索してください:\n' + hint);
+    }
+}
+
+function escAttr(v) {
+    if (v === null || v === undefined) return '';
+    return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function savePermit(pid) {
+    const body = {
+        permit_number: document.getElementById('pf_' + pid + '_number').value,
+        permit_authority: document.getElementById('pf_' + pid + '_authority').value,
+        permit_category: document.getElementById('pf_' + pid + '_category').value,
+        permit_year: document.getElementById('pf_' + pid + '_year').value,
+        issue_date: document.getElementById('pf_' + pid + '_issue').value,
+        expiry_date: document.getElementById('pf_' + pid + '_expiry').value,
+        trade_names: document.getElementById('pf_' + pid + '_trades').value,
+    };
+    const statusEl = document.getElementById('pf_' + pid + '_status');
+    statusEl.textContent = '保存中...';
+    try {
+        const resp = await fetch('/api/permits/' + pid, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (resp.ok) {
+            const updated = await resp.json();
+            // 内部データも更新
+            const permits = companyData.permits || [];
+            const idx = permits.findIndex(p => p.permit_id === pid);
+            if (idx >= 0) permits[idx] = updated;
+            statusEl.textContent = '✓ 保存完了 ' + new Date().toLocaleTimeString();
+            statusEl.style.color = '#4CAF50';
+        } else {
+            statusEl.textContent = '✗ 保存失敗 (' + resp.status + ')';
+            statusEl.style.color = '#f44336';
+        }
+    } catch (e) {
+        console.error('savePermit error:', e);
+        statusEl.textContent = '✗ 保存エラー: ' + e.message;
+        statusEl.style.color = '#f44336';
+    }
+}
+
+async function mlitRefreshOne() {
+    if (!companyData) return;
+    const cid = companyData.company.company_id;
+    const btn = document.getElementById('mlit-refresh-btn');
+    const statusEl = document.getElementById('mlit-refresh-status');
+    if (!btn || !statusEl) return;
+    if (!confirm('MLIT で ' + cid + ' の最新許可情報を取得します。\n約15秒かかります。続行しますか？')) return;
+    btn.disabled = true;
+    btn.textContent = '⏳ MLIT 確認中...（最大60秒）';
+    btn.style.opacity = '0.6';
+    statusEl.style.color = '#aaa';
+    const started = Date.now();
+    const tickHandle = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - started) / 1000);
+        statusEl.textContent = '経過: ' + elapsed + ' 秒';
+    }, 500);
+    try {
+        const resp = await fetch('/api/companies/' + cid + '/mlit_refresh', { method: 'POST' });
+        clearInterval(tickHandle);
+        if (resp.ok) {
+            const data = await resp.json();
+            const colorMap = { '一致': '#4CAF50', '不一致': '#f44336', '確認不可': '#ff9800' };
+            statusEl.textContent = '✓ ' + data.result + ' (' + data.elapsed_sec + '秒)';
+            statusEl.style.color = colorMap[data.result] || '#aaa';
+            await loadCompany(cid);
+        } else {
+            const err = await resp.text();
+            statusEl.textContent = '✗ 失敗: ' + resp.status + ' ' + err.slice(0, 120);
+            statusEl.style.color = '#f44336';
+        }
+    } catch (e) {
+        clearInterval(tickHandle);
+        statusEl.textContent = '✗ エラー: ' + e.message;
+        statusEl.style.color = '#f44336';
+    } finally {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.textContent = '🔄 MLITで最新化（15秒）';
+    }
+}
+
+async function openMlit(pid) {
+    try {
+        const resp = await fetch('/api/permits/' + pid + '/mlit_url');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        // MLIT検索ページを新タブで開く + 検索条件をクリップボードにコピー
+        window.open(data.url, '_blank');
+        const searchHint = '会社名: ' + data.company_name + '\n許可番号: ' + (data.permit_number || '(未設定)') + '\n行政庁: ' + (data.permit_authority || '(未設定)');
+        try {
+            await navigator.clipboard.writeText(searchHint);
+            alert('MLIT検索ページを開きました。以下の情報をクリップボードにコピーしました:\n\n' + searchHint);
+        } catch (e) {
+            alert('MLIT検索ページを開きました。以下の情報で検索してください:\n\n' + searchHint);
+        }
+    } catch (e) {
+        console.error('openMlit error:', e);
+    }
 }
 
 // --- Save doc type via API ---
@@ -507,17 +709,186 @@ document.getElementById('image-viewport').addEventListener('dblclick', () => {
     vp.addEventListener('mouseleave', () => { dragging = false; vp.classList.remove('dragging'); });
 })();
 
+// --- 要確認キュー ---
+let reviewQueue = [];
+let reviewQueueTotal = 0;
+
+async function fetchReviewQueue() {
+    try {
+        const resp = await fetch('/api/review/queue?limit=500');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        reviewQueue = data.items || [];
+        reviewQueueTotal = data.total || 0;
+        const el = document.getElementById('review-queue-count');
+        if (el) el.textContent = reviewQueueTotal + '件';
+    } catch (e) {
+        console.error('fetchReviewQueue:', e);
+    }
+}
+
+async function jumpNextReview() {
+    await fetchReviewQueue();
+    if (reviewQueue.length === 0) {
+        alert('要確認ページはありません。全て確認済みです。');
+        return;
+    }
+    // 現在のページより後ろを探す
+    let target = null;
+    if (companyData) {
+        const curCid = companyData.company.company_id;
+        const curPid = companyData.pages[currentPageIdx] && companyData.pages[currentPageIdx].page_id;
+        // 現在より後の最初の要確認
+        const curIdxInQueue = reviewQueue.findIndex(i => i.page_id === curPid);
+        if (curIdxInQueue >= 0 && curIdxInQueue + 1 < reviewQueue.length) {
+            target = reviewQueue[curIdxInQueue + 1];
+        } else {
+            // 現在が要確認でない or 末尾 → 先頭
+            target = reviewQueue[0];
+        }
+    } else {
+        target = reviewQueue[0];
+    }
+    await navigateToPage(target.company_id, target.page_id);
+}
+
+async function navigateToPage(companyId, pageId) {
+    if (!companyData || companyData.company.company_id !== companyId) {
+        // 会社切替
+        document.getElementById('company-select').value = companyId;
+        history.replaceState(null, '', '/viewer/' + companyId + '?filter=' + navFilter + '&focus=' + pageId);
+        await loadCompany(companyId);
+    }
+    // 指定ページへ
+    const idx = companyData.pages.findIndex(p => p.page_id === pageId);
+    if (idx >= 0) selectPage(idx);
+}
+
+async function openReviewList() {
+    await fetchReviewQueue();
+    const body = document.getElementById('review-modal-body');
+    if (reviewQueue.length === 0) {
+        body.innerHTML = '<p style="color:#4CAF50;">要確認ページはありません ✓</p>';
+    } else {
+        let html = '<p style="color:#aaa;">計 <strong>' + reviewQueueTotal + '</strong> ページ / 表示 ' + reviewQueue.length + '件（クリックでジャンプ）</p>';
+        html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#1e2b4d;">';
+        ['#', '会社', 'ファイル', 'ページ', '現分類', 'confidence'].forEach(h => {
+            html += '<th style="padding:4px 8px;text-align:left;border-bottom:1px solid #334;color:#ffc107;">' + h + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+        reviewQueue.forEach((it, i) => {
+            const conf = (it.confidence == null) ? '<span style="color:#888;">-</span>' : (it.confidence * 100).toFixed(0) + '%';
+            html += '<tr style="border-bottom:1px solid #334;cursor:pointer;" onclick="closeReviewModal();navigateToPage(\'' + it.company_id + '\',' + it.page_id + ')">';
+            html += '<td style="padding:4px 8px;color:#888;">' + (i+1) + '</td>';
+            html += '<td style="padding:4px 8px;"><strong>' + it.company_id + '</strong> ' + escAttr(it.official_name) + '</td>';
+            html += '<td style="padding:4px 8px;font-size:11px;">' + escAttr((it.file_name || '').substring(0, 40)) + '</td>';
+            html += '<td style="padding:4px 8px;text-align:center;">p' + it.page_no + '</td>';
+            html += '<td style="padding:4px 8px;"><span style="background:' + (it.doc_type_name === 'その他/不明' ? '#f44336' : '#607d8b') + ';color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;">' + escAttr(it.doc_type_name || '不明') + '</span></td>';
+            html += '<td style="padding:4px 8px;">' + conf + '</td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        body.innerHTML = html;
+    }
+    document.getElementById('review-modal').style.display = 'block';
+}
+
+function closeReviewModal() {
+    document.getElementById('review-modal').style.display = 'none';
+}
+
+// --- OCR 不一致キュー ---
+let ocrMismatchQueue = [];
+let ocrMismatchTotal = 0;
+
+async function fetchOcrMismatchQueue() {
+    try {
+        const resp = await fetch('/api/review/ocr_mismatch_queue?limit=2000');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        ocrMismatchQueue = data.items || [];
+        ocrMismatchTotal = data.total || 0;
+        const el = document.getElementById('ocr-mismatch-count');
+        if (el) el.textContent = ocrMismatchTotal + '件';
+    } catch (e) {
+        console.error('fetchOcrMismatchQueue:', e);
+    }
+}
+
+async function jumpNextOcrMismatch() {
+    // 現在ページが不一致キュー内にあり、ドロップダウンを変えていない場合は
+    // 「人手分類が正しい」として確定（field_reviews に ocr_mismatch_confirmed 記録）
+    if (companyData && ocrMismatchQueue.length > 0) {
+        const curPid = companyData.pages[currentPageIdx] && companyData.pages[currentPageIdx].page_id;
+        const curItem = ocrMismatchQueue.find(i => i.page_id === curPid);
+        if (curItem) {
+            try {
+                await fetch('/api/review/confirm_ocr_mismatch/' + curPid, { method: 'POST' });
+            } catch (e) {
+                console.error('confirm_ocr_mismatch:', e);
+            }
+        }
+    }
+    await fetchOcrMismatchQueue();
+    if (ocrMismatchQueue.length === 0) {
+        alert('OCR 不一致ページはありません。全て確認済みです。');
+        return;
+    }
+    // 確定後はキューが更新されているので、先頭から進む
+    const target = ocrMismatchQueue[0];
+    await navigateToPage(target.company_id, target.page_id);
+}
+
+async function openOcrMismatchList() {
+    await fetchOcrMismatchQueue();
+    const body = document.getElementById('review-modal-body');
+    if (ocrMismatchQueue.length === 0) {
+        body.innerHTML = '<p style="color:#4CAF50;">OCR 不一致ページはありません ✓</p>';
+    } else {
+        let html = '<p style="color:#aaa;">計 <strong>' + ocrMismatchTotal + '</strong> ページ（confidence 降順、クリックでジャンプ）</p>';
+        html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#1e2b4d;">';
+        ['#', '会社', 'ファイル', 'ページ', '現分類', 'OCR分類', 'conf'].forEach(h => {
+            html += '<th style="padding:4px 8px;text-align:left;border-bottom:1px solid #334;color:#7cd1ff;">' + h + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+        ocrMismatchQueue.forEach((it, i) => {
+            const conf = (it.ocr_confidence * 100).toFixed(0) + '%';
+            html += '<tr style="border-bottom:1px solid #334;cursor:pointer;" onclick="closeReviewModal();navigateToPage(\'' + it.company_id + '\',' + it.page_id + ')">';
+            html += '<td style="padding:4px 8px;color:#888;">' + (i+1) + '</td>';
+            html += '<td style="padding:4px 8px;"><strong>' + it.company_id + '</strong> ' + escAttr(it.official_name) + '</td>';
+            html += '<td style="padding:4px 8px;font-size:11px;">' + escAttr((it.file_name || '').substring(0, 40)) + '</td>';
+            html += '<td style="padding:4px 8px;text-align:center;">p' + it.page_no + '</td>';
+            html += '<td style="padding:4px 8px;"><span style="background:#607d8b;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;">' + escAttr(it.current_doc_type) + '</span></td>';
+            html += '<td style="padding:4px 8px;"><span style="background:#7cd1ff;color:#000;padding:1px 6px;border-radius:3px;font-size:10px;">' + escAttr(it.ocr_doc_type) + '</span></td>';
+            html += '<td style="padding:4px 8px;">' + conf + '</td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        body.innerHTML = html;
+    }
+    document.getElementById('review-modal').style.display = 'block';
+}
+
 // --- Auto-load if initial company set ---
 (async function() {
     const params = new URLSearchParams(window.location.search);
     navFilter = params.get('filter') || '{{ initial_filter | default("all") }}';
+    const focusPageId = params.get('focus');
     await fetchNavList(navFilter);
+    await fetchReviewQueue();
+    await fetchOcrMismatchQueue();
 
     const initialId = '{{ initial_company_id | default("") }}';
     if (initialId) {
         navCurrentIdx = navList.findIndex(c => c.company_id === initialId);
         document.getElementById('company-select').value = initialId;
         await loadCompany(initialId);
+
+        // URL ?focus=pageId があれば そのページへジャンプ
+        if (focusPageId && companyData) {
+            const idx = companyData.pages.findIndex(p => p.page_id === parseInt(focusPageId));
+            if (idx >= 0) selectPage(idx);
+        }
     }
     updateNavUI();
 })();
