@@ -373,3 +373,58 @@ function debugRefreshOneByCompanyId(companyId) {
   var res = refreshOneMlitPermit_(permit);
   Logger.log('result: ' + res.result + ' message: ' + res.message);
 }
+
+// ---------------------------------------------------------------------------
+// Trigger セットアップ（冪等）
+// ---------------------------------------------------------------------------
+
+/**
+ * runDailyMlitRolling の time-driven trigger を毎日 02:00-03:00 で登録する。
+ * 既に同名 trigger があれば一旦削除してから登録（冪等）。
+ *
+ * 実行方法:
+ *   - GAS エディタ: 関数 setupMlitRollingTrigger を選んで Run
+ *   - clasp run: clasp run setupMlitRollingTrigger
+ *
+ * @return {Object} {removed: 削除数, created: trigger ID}
+ */
+function setupMlitRollingTrigger() {
+  var existingTriggers = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  existingTriggers.forEach(function(t) {
+    if (t.getHandlerFunction() === 'runDailyMlitRolling') {
+      ScriptApp.deleteTrigger(t);
+      removed++;
+    }
+  });
+
+  var newTrigger = ScriptApp.newTrigger('runDailyMlitRolling')
+    .timeBased()
+    .atHour(2)            // 午前 2 時台に起動（GAS 内部で 2:00-3:00 のいずれか）
+    .everyDays(1)
+    .create();
+
+  var info = {
+    removed: removed,
+    created: newTrigger.getUniqueId(),
+    handler: 'runDailyMlitRolling',
+    schedule: 'everyDays(1) at hour 2'
+  };
+  Logger.log('setupMlitRollingTrigger 完了: ' + JSON.stringify(info));
+  return info;
+}
+
+/**
+ * 現在登録されている trigger を一覧表示（debug 用）
+ */
+function listProjectTriggers() {
+  var triggers = ScriptApp.getProjectTriggers();
+  Logger.log('登録 trigger 数: ' + triggers.length);
+  triggers.forEach(function(t, i) {
+    Logger.log(
+      (i + 1) + ': handler=' + t.getHandlerFunction() +
+      ' eventType=' + t.getEventType() +
+      ' uniqueId=' + t.getUniqueId()
+    );
+  });
+}
