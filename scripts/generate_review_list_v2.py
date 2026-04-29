@@ -49,10 +49,10 @@ REQUIRED_DOCS = [
 # 例: 三和シャッターは工事経歴書を業務上提出不可と回答 (2026-04-24)
 # 将来複数社で発生したら DB テーブル化を検討
 COMPANY_NOTES = {
-    "C0008": "工事経歴書: 三和側ポリシーで提出不可 (2026-04-24 確定)",
-    "C0060": "工事経歴書: 井上商会お断り、書類不備のまま審査 (2026-04-29 藤田指摘)",
-    "C0029": "4/10メール添付の取引申請書・誓約書が未取込 (次フェーズ EMAIL_REIMPORT)",
-    "C0023": "3/28メール添付の決算書・工事経歴書・取引先一覧が未取込 (次フェーズ EMAIL_REIMPORT)",
+    "C0008": "藤田: 工事経歴書 三和側ポリシーで提出不可 (2026-04-24 確定)",
+    "C0060": "藤田: 工事経歴書 お断り、書類不備のまま審査へ",
+    "C0029": "藤田: 取引申請書・誓約書 4/10メールに添付あり",
+    "C0023": "藤田: 決算書・工事経歴書・取引先一覧 3/28メールに添付あり",
 }
 
 
@@ -174,7 +174,7 @@ def write_main_sheet(wb, master_rows, conn, matched_map):
         if match_info is None:
             row = [i, "", m_name, "", "未登録", "", "", "", "", "", "", "", ""]
             row.extend(["×"] * len(REQUIRED_DOCS))
-            row.extend([f"0/{len(REQUIRED_DOCS)}", "×", "", "当方未登録"])
+            row.extend([f"0/{len(REQUIRED_DOCS)}", "×", "", ""])
             cnt["unreg"] += 1
         else:
             d, level = match_info
@@ -233,8 +233,8 @@ def write_main_sheet(wb, master_rows, conn, matched_map):
     note_col = headers.index("備考") + 1
     for r in range(2, ws.max_row + 1):
         val = ws.cell(r, approve_col).value
-        note = ws.cell(r, note_col).value
-        if note == "当方未登録":
+        match_type = ws.cell(r, 5).value
+        if match_type == "未登録":
             ws.cell(r, approve_col).fill = grey
         elif val == "◎":
             ws.cell(r, approve_col).fill = green
