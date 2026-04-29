@@ -15,7 +15,7 @@ REM ============================================================================
 setlocal
 set "PROJECT_DIR=c:\ProgramData\Generative AI\Github\construction-permit-tracker"
 set "LOG_DIR=%PROJECT_DIR%\logs"
-set "PYTHON_EXE=python"
+set "PYTHON_EXE=C:\Users\owner\AppData\Local\Programs\Python\Python313\python.exe"
 
 REM 日付付きログファイル
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value ^| find "="') do set "DT=%%I"

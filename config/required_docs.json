@@ -1,0 +1,83 @@
+[
+  {
+    "id": "construction_permit",
+    "order": 10,
+    "folder": "01_建設業許可証",
+    "display": "建設業許可証",
+    "applies_to": "has_construction_permit",
+    "aliases": ["建設業許可証", "許可証", "許可通知書", "建築業許可"],
+    "retention_years": 10
+  },
+  {
+    "id": "construction_history",
+    "order": 20,
+    "folder": "02_工事経歴書",
+    "display": "工事経歴書",
+    "applies_to": "all_active",
+    "aliases": ["工事経歴書", "施工実績", "工事実績"],
+    "retention_years": 10
+  },
+  {
+    "id": "financial_statement",
+    "order": 30,
+    "folder": "03_決算書",
+    "display": "決算書",
+    "applies_to": "all_active",
+    "aliases": ["決算書", "決算報告書", "損益計算書", "貸借対照表"],
+    "retention_years": 5
+  },
+  {
+    "id": "transaction_terms",
+    "order": 40,
+    "folder": "04_御取引条件等説明書",
+    "display": "御取引条件等説明書",
+    "applies_to": "all_active",
+    "aliases": ["御取引条件等説明書", "取引条件等説明書", "取引申請書", "新規・継続取引申請書"],
+    "retention_years": 5
+  },
+  {
+    "id": "company_profile",
+    "order": 50,
+    "folder": "05_会社案内",
+    "display": "会社案内",
+    "applies_to": "all_active",
+    "aliases": ["会社案内", "会社概要", "会社プロフィール"],
+    "retention_years": 5
+  },
+  {
+    "id": "safety_oath",
+    "order": 60,
+    "folder": "06_労働安全衛生誓約書",
+    "display": "労働安全衛生誓約書",
+    "applies_to": "all_active",
+    "aliases": ["労働安全衛生誓約書", "誓約書"],
+    "retention_years": 5
+  },
+  {
+    "id": "customer_list",
+    "order": 70,
+    "folder": "07_取引先一覧表",
+    "display": "取引先一覧表",
+    "applies_to": "all_active",
+    "aliases": ["取引先一覧表", "主要取引先", "得意先"],
+    "retention_years": 5
+  },
+  {
+    "id": "employee_list",
+    "order": 80,
+    "folder": "08_労働者名簿",
+    "display": "労働者名簿",
+    "applies_to": "all_active",
+    "aliases": ["労働者名簿", "従業員名簿"],
+    "retention_years": 5
+  },
+  {
+    "id": "qualification_list",
+    "order": 90,
+    "folder": "09_資格略字一覧",
+    "display": "資格略字一覧",
+    "applies_to": "all_active",
+    "aliases": ["資格略字", "資格者名簿", "有資格者", "技能者名簿"],
+    "retention_years": 5
+  }
+]

@@ -28,8 +28,8 @@
 // ---------------------------------------------------------------------------
 
 var MLIT_ROLLING_DEFAULTS_ = {
-  DAILY_LIMIT: 5,        // 1回の実行で再確認する最大件数
-  MAX_STALE_DAYS: 30     // 最終同期からこの日数以上経過したものを対象
+  DAILY_LIMIT: 8,        // 1回の実行で再確認する最大件数 (52社÷8=6.5日で1巡、週次達成)
+  MAX_STALE_DAYS: 7      // 最終同期からこの日数以上経過したものを対象 (週次更新化、2026-04-27 改修)
 };
 
 var MLIT_ROLLING_PAUSE_KEY_ = 'MLIT_ROLLING_PAUSE';
@@ -268,7 +268,7 @@ function refreshOneMlitPermit_(permit) {
  *
  * 設定値（ScriptProperties で上書き可）:
  *   - MLIT_ROLLING_DAILY_LIMIT (default: 5)
- *   - MLIT_ROLLING_MAX_STALE_DAYS (default: 30)
+ *   - MLIT_ROLLING_MAX_STALE_DAYS (default: 7、2026-04-27 改修で 30→7)
  *   - MLIT_ROLLING_PAUSE='true' で即時停止
  *
  * Note: ScriptLock は使わない（withMlitRateLimit_ が短時間ロック取るのみ）。
