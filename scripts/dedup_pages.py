@@ -215,7 +215,8 @@ def main():
     updates = []  # (winner_pid, new_conf)
     doc_merges = []  # (winner_pid, new_doc_type)
     file_merges = []  # (winner_pid, new_file_id)
-    history_migrations = []  # (loser_pid → winner_pid) の history page_id 移管
+    history_migrations = []  # (loser_pid → winner_pid) page_doc_type_history 移管
+    ocr_run_migrations = []  # (loser_pid → winner_pid) ocr_runs 移管
     mismatches = []  # 警告: winner 維持で進める不一致
     deletes = []
     winners = []  # winner page_id 一覧（assert 用）
@@ -238,10 +239,16 @@ def main():
         copy_fid = merge_file_id_group(winner, losers)
         if copy_fid is not None:
             file_merges.append((winner["page_id"], copy_fid))
-        # loser ごとに history 移管 + delete
+        # loser ごとに参照テーブル移管 + delete
         for loser in losers:
             if has_history(conn, loser["page_id"]):
                 history_migrations.append((loser["page_id"], winner["page_id"]))
+            # ocr_runs にも page_id 参照あり → 移管対象（条件チェック含めて常時積む、UPDATE で 0 row もありえる）
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM ocr_runs WHERE page_id=?", (loser["page_id"],)
+            ).fetchone()[0]
+            if cnt > 0:
+                ocr_run_migrations.append((loser["page_id"], winner["page_id"]))
             deletes.append(loser["page_id"])
 
     # 安全 assert (GPT-5.5 指摘): deletes に重複なし、winner と loser に重複なし
@@ -255,6 +262,7 @@ def main():
     print(f"  doc_type マージ (winner NULL → loser値): {len(doc_merges)} 件")
     print(f"  file_id マージ (winner NULL → loser値): {len(file_merges)} 件")
     print(f"  history 移管 (loser → winner): {len(history_migrations)} 件")
+    print(f"  ocr_runs 移管 (loser → winner): {len(ocr_run_migrations)} 件")
     print(f"  doc_type 不一致 (winner 維持・要レビュー): {len(mismatches)} 件")
     if mismatches:
         mm_path = PROJECT / "data" / f"dedup_mismatches_{ts}.csv"
@@ -306,6 +314,14 @@ def main():
                 (winner_pid, loser_pid),
             )
         print(f"  UPDATE page_doc_type_history.page_id 移管完了: {len(history_migrations)} 件")
+
+        # ocr_runs 移管（FK dangling 防止）
+        for loser_pid, winner_pid in ocr_run_migrations:
+            conn.execute(
+                "UPDATE ocr_runs SET page_id=? WHERE page_id=?",
+                (winner_pid, loser_pid),
+            )
+        print(f"  UPDATE ocr_runs.page_id 移管完了: {len(ocr_run_migrations)} 件")
 
         placeholders = ",".join("?" * len(deletes))
         conn.execute(f"DELETE FROM pages WHERE page_id IN ({placeholders})", deletes)
