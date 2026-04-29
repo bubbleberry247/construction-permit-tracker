@@ -1,3 +1,6 @@
+import uuid
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -51,6 +54,23 @@ def update_page(page_id: int, body: PageUpdate):
                 "VALUES (?, 'doc_type_name', ?, 'web_viewer')",
                 (company_id, body.doc_type_name),
             )
+            old_doc = page["doc_type_name"]
+            if old_doc != body.doc_type_name:
+                conn.execute(
+                    "INSERT INTO page_doc_type_history "
+                    "(page_id, company_id, file_name, page_no, old_doc_type_name, "
+                    " new_doc_type_name, reason, workflow_id, decision_id, confirmed_by) "
+                    "SELECT page_id, company_id, file_name, page_no, ?, ?, ?, ?, ?, 'web_viewer' "
+                    "FROM pages WHERE page_id = ?",
+                    (
+                        old_doc,
+                        body.doc_type_name,
+                        "web_viewer manual reclassification",
+                        f"web_viewer_{datetime.now().strftime('%Y%m%d')}",
+                        str(uuid.uuid4()),
+                        page_id,
+                    ),
+                )
 
         if body.rotation is not None:
             updates.append("rotation = ?")
