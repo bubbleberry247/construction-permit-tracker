@@ -89,9 +89,29 @@ def fetch_company_details(conn: sqlite3.Connection, company_id: str) -> dict:
     ):
         if r[0]:
             doc_types.add(r[0])
-    doc_checks = {dt: ("○" if dt in doc_types else "×") for dt in REQUIRED_DOCS}
-    has_count = sum(1 for dt in REQUIRED_DOCS if dt in doc_types)
-    if has_count == len(REQUIRED_DOCS):
+
+    # exemption 取得（卸業者で工事経歴書不要 等）
+    exempts = {r[0] for r in cur.execute(
+        "SELECT document_type FROM company_doc_exemptions "
+        "WHERE company_id=? AND exempt_kind IN ('NOT_APPLICABLE','ALTERNATIVE')",
+        (company_id,)
+    )}
+
+    doc_checks = {}
+    for dt in REQUIRED_DOCS:
+        if dt in exempts:
+            doc_checks[dt] = "—"  # 対象外
+        elif dt in doc_types:
+            doc_checks[dt] = "○"
+        else:
+            doc_checks[dt] = "×"
+
+    # 揃い判定: 対象外を分母から除外
+    required_for_company = [dt for dt in REQUIRED_DOCS if dt not in exempts]
+    has_count = sum(1 for dt in required_for_company if dt in doc_types)
+    if not required_for_company:
+        approve = "◎"  # 全 exemption (起こりにくいが念のため)
+    elif has_count == len(required_for_company):
         approve = "◎"
     elif has_count > 0:
         approve = "△"
@@ -106,8 +126,10 @@ def fetch_company_details(conn: sqlite3.Connection, company_id: str) -> dict:
         "permit": permit,
         "doc_checks": doc_checks,
         "has_count": has_count,
+        "required_count": len(required_for_company),
         "approve": approve,
         "last_recv": last_recv or "",
+        "exempts": exempts,
     }
 
 
@@ -171,8 +193,11 @@ def write_main_sheet(wb, master_rows, conn, matched_map):
             ]
             row.extend([details["doc_checks"][dt] for dt in REQUIRED_DOCS])
             note = COMPANY_NOTES.get(d["company_id"], "")
+            if details["exempts"]:
+                ex_note = "対象外: " + "/".join(sorted(details["exempts"]))
+                note = (note + " | " + ex_note) if note else ex_note
             row.extend([
-                f"{details['has_count']}/{len(REQUIRED_DOCS)}",
+                f"{details['has_count']}/{details['required_count']}",
                 details["approve"],
                 details["last_recv"],
                 note,
