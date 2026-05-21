@@ -236,9 +236,7 @@ function refreshOneMlitPermit_(permit) {
   (detail.tradesTokutei || []).forEach(function(t) { if (t) allTradesMap[t] = true; });
   var tradesCount = Object.keys(allTradesMap).length;
 
-  var daysRemaining = detail.expiryTo
-    ? Math.floor((new Date(detail.expiryTo) - new Date()) / 86400000)
-    : null;
+  var daysRemaining = resolveDaysRemaining_(detail.expiryTo, null);
 
   var freshRow2 = resolveMlitPermitRow_(authority, permitNumber);
   if (freshRow2 < 0) {

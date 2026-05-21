@@ -32,7 +32,7 @@ function parseDate(str) {
     return isNaN(str.getTime()) ? null : str;
   }
   var s = String(str).trim().replace(/-/g, '/');
-  var m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  var m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:[ T].*)?$/);
   if (!m) return null;
   var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   if (isNaN(d.getTime())) return null;

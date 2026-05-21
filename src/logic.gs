@@ -15,6 +15,40 @@ function resolvePermitStatus_(daysLeft) {
   return 'ok';
 }
 
+function normalizeStoredDaysRemaining_(daysLeft) {
+  if (daysLeft === null || daysLeft === undefined || daysLeft === '') return null;
+  var d = Number(daysLeft);
+  return isNaN(d) ? null : d;
+}
+
+function resolveDaysRemaining_(expiryDate, storedDaysLeft) {
+  var liveDays = daysUntil(expiryDate);
+  if (!isNaN(liveDays)) return liveDays;
+  return normalizeStoredDaysRemaining_(storedDaysLeft);
+}
+
+function enrichMlitPermitForDisplay_(permit) {
+  var daysRemaining = resolveDaysRemaining_(permit.expiry_date, permit.days_remaining);
+  var status = resolvePermitStatus_(daysRemaining);
+  return {
+    company_id: permit.company_id || '',
+    company_name: permit.company_name || '',
+    permit_number: permit.permit_number || '',
+    authority: permit.authority || '',
+    category: permit.category || '',
+    expiry_date: permit.expiry_date || '',
+    expiry_wareki: permit.expiry_wareki || '',
+    days_remaining: daysRemaining,
+    trades_count: permit.trades_count || 0,
+    trades_ippan: permit.trades_ippan || '',
+    trades_tokutei: permit.trades_tokutei || '',
+    fetch_status: permit.fetch_status || '',
+    last_synced: permit.last_synced || '',
+    status: status,
+    _row: permit._row
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
@@ -38,9 +72,8 @@ function buildDashboardData_() {
     // ホワイトリスト方式: OKのみ表示、それ以外（NOT_FOUND, DUPLICATE_DELETE等）は非表示
     if (p.fetch_status !== 'OK') return;
 
-    var daysRemaining = (p.days_remaining !== '' && p.days_remaining !== 0 && p.days_remaining !== '0')
-      ? Number(p.days_remaining) : null;
-    var status = resolvePermitStatus_(daysRemaining);
+    var row = enrichMlitPermitForDisplay_(p);
+    var status = row.status;
 
     // Company status check
     var company = companyMap[p.company_id] || {};
@@ -49,20 +82,7 @@ function buildDashboardData_() {
     counts.total++;
     if (counts[status] !== undefined) counts[status]++;
 
-    rows.push({
-      company_id: p.company_id || '',
-      company_name: p.company_name || '',
-      permit_number: p.permit_number || '',
-      authority: p.authority || '',
-      category: p.category || '',
-      expiry_date: p.expiry_date || '',
-      days_remaining: daysRemaining,
-      trades_count: p.trades_count || 0,
-      trades_ippan: p.trades_ippan || '',
-      trades_tokutei: p.trades_tokutei || '',
-      fetch_status: p.fetch_status || '',
-      status: status
-    });
+    rows.push(row);
   });
 
   // Sort by days_remaining ascending (most urgent first)
@@ -91,7 +111,8 @@ function getCompanyDetail_(companyId) {
   var company = findByKey_(SHEETS.Companies, 'company_id', companyId);
 
   // Permits from MLITPermits
-  var permits = findAllByKey_(SHEETS.MLITPermits, 'company_id', companyId);
+  var permits = findAllByKey_(SHEETS.MLITPermits, 'company_id', companyId)
+    .map(enrichMlitPermitForDisplay_);
 
   // Notification history
   var allNotifs = readRecords_(SHEETS.Notifications);
@@ -342,7 +363,7 @@ function registerCompanyWithPermit_(formData, userEmail) {
     }
 
     // --- MLITPermits 書込 ---
-    var daysRemaining = expiryTo ? Math.floor((new Date(expiryTo) - new Date()) / 86400000) : null;
+    var daysRemaining = resolveDaysRemaining_(expiryTo, null);
 
     var hasIppan = tradesIppan && tradesIppan.length > 0;
     var hasTokutei = tradesTokutei && tradesTokutei.length > 0;
@@ -380,7 +401,7 @@ function registerCompanyWithPermit_(formData, userEmail) {
       category: category,
       expiry_date: expiryTo,
       expiry_wareki: expiryWareki,
-      days_remaining: daysRemaining,
+      days_remaining: daysRemaining !== null ? daysRemaining : '',
       trades_ippan: tradesIppanStr,
       trades_tokutei: tradesTokuteiStr,
       trades_count: tradesCount,

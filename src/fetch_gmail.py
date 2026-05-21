@@ -49,11 +49,12 @@ GMAIL_SCOPES = [
 # InboundLog CSV カラム定義
 INBOUND_LOG_HEADERS = [
     "log_id", "message_id", "attachment_id",
-    "received_at", "sender_email", "original_sender_email",
+    "received_at", "sender_email",
     "file_name", "file_hash", "file_size_bytes",
     "saved_path", "process_status",
     "process_started_at", "process_finished_at",
     "error_message", "staging_csv_path", "created_at",
+    "original_sender_email",
 ]
 
 logging.basicConfig(
@@ -134,6 +135,22 @@ def load_inbound_log(log_path: Path) -> set[tuple[str, str]]:
     return processed
 
 
+def load_processed_hashes(log_path: Path) -> set[str]:
+    """既取り込み済みの file_hash 集合を返す。
+    異なる message_id でも同一 file_hash なら重複扱いするための再取込防止。
+    """
+    hashes: set[str] = set()
+    if not log_path.exists():
+        return hashes
+    with log_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            h = (row.get("file_hash") or "").strip()
+            status = (row.get("process_status") or "").strip()
+            if h and status not in ("FAILED", "DUPLICATE"):
+                hashes.add(h)
+    return hashes
+
+
 def append_inbound_log(log_path: Path, record: dict[str, Any]) -> None:
     """InboundLog CSV に1行追記する。ファイルが存在しない場合はヘッダ付きで新規作成。"""
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,7 +204,8 @@ def fetch_pdf_attachments(
     Returns: 保存したファイル数
     """
     processed_pairs = load_inbound_log(log_path)
-    logger.info("既処理ペア数: %d", len(processed_pairs))
+    processed_hashes = load_processed_hashes(log_path)
+    logger.info("既処理ペア数: %d / 既処理 hash 数: %d", len(processed_pairs), len(processed_hashes))
 
     # 未処理メール検索（全添付ファイル対象、処理済みラベルなし）
     # Gmail query は label_name（表示名）で除外する。label_id は addLabelIds 専用
@@ -293,6 +311,23 @@ def fetch_pdf_attachments(
             file_hash = sha256_of_bytes(data)
             file_size = len(data)
 
+            # 二次判定: file_hash 重複チェック (再取込防止)
+            # 同一添付が異なる message_id で再送/再フェッチされても同じ hash になるはず
+            if file_hash in processed_hashes:
+                logger.info("SKIP (hash 重複): %s [hash=%s] 既取込済", file_name, file_hash[:8])
+                append_inbound_log(log_path, {
+                    "log_id": _new_id(), "message_id": message_id, "attachment_id": attachment_id,
+                    "received_at": received_at, "sender_email": sender_email,
+                    "original_sender_email": original_sender_email,
+                    "file_name": file_name, "file_hash": file_hash, "file_size_bytes": file_size,
+                    "saved_path": "", "process_status": "DUPLICATE",
+                    "error_message": "同一 file_hash が既に inbound_log に存在",
+                    "created_at": _now(),
+                })
+                processed_pairs.add((message_id, attachment_id))
+                any_new = True  # ラベル付与は実行 (Gmail 側で再フェッチ防止)
+                continue
+
             # 保存先: inbox/{YYYYMMDD_HHMMSS}_{filename}
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_name = f"{ts}_{file_name}"
@@ -317,6 +352,7 @@ def fetch_pdf_attachments(
             })
 
             processed_pairs.add((message_id, attachment_id))
+            processed_hashes.add(file_hash)
             saved_count += 1
             any_new = True
 
