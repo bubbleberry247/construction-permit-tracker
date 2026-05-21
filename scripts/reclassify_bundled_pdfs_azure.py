@@ -45,6 +45,12 @@ def classify_page(text: str) -> tuple[str, float]:
     if re.search(r"(建設業.{0,4}許可番号|建設業法第 ?3 ?条|一般建設業について|特定建設業について)", t):
         return ("建設業許可証", 0.90)
 
+    # 取引申請書 / 提出書類チェックリスト
+    # 決算書より前で判定する。申請書の表紙に「第」「期」などが混ざり、
+    # 財務ページとして誤判定されるケースを避けるため。
+    if re.search(r"取\s*引\s*条\s*件\s*等\s*説\s*明\s*書|新\s*規\s*[·・]?\s*継\s*続\s*取\s*引|取\s*引\s*申\s*請\s*書|提\s*出\s*書\s*類\s*チェック|申\s*請\s*日", t):
+        return ("取引申請書", 0.95)
+
     # 決算書（拡張：「決算報告書」「第X期」「工事原価報告書」等）
     if re.search(r"決\s*算\s*報\s*告\s*書|決\s*算\s*書", t) and re.search(r"第\s*\d+\s*期|令和|平成|至\s*令和|自\s*令和", t):
         return ("決算書", 0.9)
@@ -64,12 +70,15 @@ def classify_page(text: str) -> tuple[str, float]:
     if fin_hits == 1 and any(k in t for k in ["第 ", "期 ", "令和", "平成"]) and re.search(r"\d{1,3}(,\d{3})+", t):
         return ("決算書", 0.8)
 
-    # 工事経歴書
+    # 工事経歴書 / 工事実績表
     if re.search(r"工\s*事\s*経\s*歴\s*書", t):
         return ("工事経歴書", 0.95)
+    compact = re.sub(r"\s+", "", t)
+    if re.search(r"工事実績表|工事実績", compact):
+        return ("工事経歴書", 0.95)
     work_hits = 0
-    for kw in ["工事名", "発注者", "工事場所", "工期", "請負代金", "請負金額", "完成年月", "注文者", "着工年月"]:
-        if kw in t:
+    for kw in ["工事名", "工事件名", "発注者", "工事場所", "施工地", "工期", "請負代金", "請負金額", "完成年月", "注文者", "着工年月"]:
+        if kw in t or kw in compact:
             work_hits += 1
     if work_hits >= 3:
         return ("工事経歴書", 0.85)

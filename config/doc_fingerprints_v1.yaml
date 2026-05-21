@@ -1,0 +1,447 @@
+# 書類フィンガープリント v1.1 (横断データ分析ベース)
+# 生成: 2026-04-30 15:10 - data/fingerprint_analysis_20260430_151008.{json,md}
+# 各キーワードは:
+#   in_rate ≥ 0.7  (クラス内含有率) かつ
+#   discriminative ≥ 0.4 (in_rate - out_rate)
+# を満たすものを selected。
+#
+# スコアリング:
+#   heading_match (top 200 chars):  +3.0  (1 ヒット限定)
+#   required_keyword (each):        +1.5
+#   support_keyword  (each):        +0.5  (上限 5 ヒット = 2.5 点)
+#   regex_pattern (各 regex の score):
+#   negative_keyword (each):        -1.0
+# confidence = clip( (score - min_score) / divisor + floor, floor, ceiling )
+#   ただし score < min_score なら採用しない
+
+version: "v1.1"
+
+documents:
+  建設業許可証:
+    # データ: n=61, permit_number regex 0.62 vs 0.05, era_date 0.84 vs 0.26
+    headings:
+      - "建設業許可証"
+      - "建設業許可通知書"
+      - "建設業の許可"
+      - "建設業について"  # データ駆動: rate 1.33 (頻出)
+      - "建設業許可"
+      - "許可通知書"
+      - "一般建設業"
+      - "特定建設業"
+    required_keywords:
+      - "許可"            # rate 1.00
+      - "建設業"          # rate 0.97
+    support_keywords:
+      - "許可番号"
+      - "許可年月日"
+      - "知事"
+      - "大臣"
+      - "国土交通大臣"
+      - "業種"
+      - "有効期間"
+      - "建設業の種類"
+      - "商号"
+      - "代表者"
+      - "建設業法"
+      - "提出期限"        # データ駆動: rate 0.75, z 13.38
+      - "許可の更新"      # データ駆動: rate 0.75, z 13.34
+      - "更新"
+    regex_patterns:
+      permit_number_paren: ['許可\s*[（(]\s*[般特]\s*[–\-―—ー]+\s*\d+', 4.0]
+      permit_number_strict: ['(般|特)[–\-―—ー\s]*\d+\)?\s*第\s*\d+\s*号', 4.0]
+      law_article: ['建設業法\s*第\s*3\s*条', 3.0]
+      authority_perm: ['(知事|大臣|国土交通大臣)\s*許可', 2.0]
+    negative_keywords:
+      - "誓約します"
+      - "貸借対照表"
+      - "損益計算書"
+      - "工事経歴書"
+      - "労働者名簿"
+      - "資格略字一覧"
+      - "取引先一覧"
+    min_score: 4.0
+    confidence_divisor: 6.0
+    confidence_floor: 0.85
+    confidence_ceiling: 0.96
+
+  決算書:
+    # データ: amount_comma 0.69 vs 0.06 (disc 0.62), 「単位」「金額」「一般管理費」「販売費」が強い
+    headings:
+      - "決算報告書"
+      - "決算書"
+      - "貸借対照表"
+      - "損益計算書"
+      - "工事原価報告書"
+      - "製造原価報告書"
+      - "個別注記表"
+      - "株主資本等変動計算書"
+      - "キャッシュ・フロー計算書"
+      - "科目金額"  # データ駆動: rate 0.43 in 上部
+    required_keywords: []
+    support_keywords:
+      - "資産合計"
+      - "負債の部"
+      - "純資産の部"
+      - "流動資産"
+      - "固定資産"
+      - "流動負債"
+      - "固定負債"
+      - "営業利益"
+      - "経常利益"
+      - "当期純利益"
+      - "売上原価"
+      - "売上総利益"
+      - "販売費及び一般管理費"
+      - "一般管理費"     # データ駆動: rate 0.43, z 9.18
+      - "販売費"
+      - "材料費"
+      - "労務費"
+      - "外注費"
+      - "経費合計"
+      - "前期繰越金"
+      - "資本準備金"
+      - "利益剰余金"
+      - "棚卸資産"
+      - "完成工事高"
+      - "完成工事原価"
+      - "金額"           # データ駆動: rate 0.47, z 12.0
+      - "(単位:円)"      # データ駆動: rate 0.65 (高識別)
+      - "単位"
+      - "支払"           # データ駆動: rate 0.42, z 9.94
+      - "原価"
+    regex_patterns:
+      period: ['第\s*\d+\s*期', 2.0]
+      era: ['(令和|平成)\s*\d+\s*年', 0.5]
+      amount_comma: ['\d{1,3}(,\d{3}){2,}', 0.4]
+      unit_yen: ['\(単位[:：]\s*円\)', 2.5]
+    negative_keywords:
+      - "誓約します"
+      - "新規取引"
+      - "継続取引"
+      - "工事経歴"
+      - "労働者名簿"
+      - "資格略字"
+    min_score: 3.0
+    confidence_divisor: 6.0
+    confidence_floor: 0.80
+    confidence_ceiling: 0.95
+    extra_checks:
+      amount_count_min: 5  # 金額パターンが 5 個以上必要
+
+  工事経歴書:
+    # データ: 「経歴書」 0.86, 「工事名」「下請」「元請」「現場」「建設工事」が強い、thousand_yen 0.50 vs 0.00
+    headings:
+      - "工事経歴書"
+      - "工事経歴"
+      - "主な工事経歴"
+      - "工事実績"
+      - "建設工事"
+    required_keywords:
+      - "工事名"          # rate 0.87
+    support_keywords:
+      - "経歴書"          # rate 0.86
+      - "発注者"
+      - "工事場所"
+      - "工期"
+      - "請負代金"
+      - "請負金額"
+      - "完成年月"
+      - "注文者"
+      - "着工年月"
+      - "完成又は完成予定年月"
+      - "工事の内容"
+      - "請負代金額"
+      - "下請"            # データ駆動: rate 0.81, z 17.81
+      - "元請"            # データ駆動: rate 0.81, z 17.49
+      - "現場"            # データ駆動: rate 0.83, z 17.89
+      - "建設工事"        # データ駆動: rate 0.83
+      - "完成"
+      - "JVの別"
+      - "JV"
+    regex_patterns:
+      era_with_month: ['(令和|平成)\s*\d+\s*年\s*\d+\s*月', 0.4]
+      thousand_yen: ['\d{1,5},\d{3}\s*千円', 1.5]   # データ駆動: 高識別 0.50 vs 0.00
+    negative_keywords:
+      - "決算報告"
+      - "貸借対照表"
+      - "損益計算書"
+      - "誓約します"
+      - "労働者名簿"
+      - "資格略字"
+    min_score: 3.0
+    confidence_divisor: 5.0
+    confidence_floor: 0.85
+    confidence_ceiling: 0.96
+
+  労働者名簿:
+    # データ: 「名簿」 0.99, 「生年月日」 0.96, slash_date 0.83 vs 0.03, postal_code 0.96 vs 0.19
+    headings:
+      - "労働者名簿"
+      - "従業員名簿"
+      - "社員名簿"
+      - "協力会社"        # データ駆動: rate 0.54 in heading
+    required_keywords:
+      - "名簿"            # rate 0.99
+      - "生年月日"        # rate 0.96
+    support_keywords:
+      - "氏 名"
+      - "氏名"
+      - "雇入年月日"
+      - "従事する業務"
+      - "現住所"
+      - "本籍"
+      - "性 別"
+      - "性別"
+      - "経験年数"
+      - "工事責任者"
+      - "労務安全担当者"
+      - "労務"            # データ駆動: rate 0.85, z 15.9
+      - "年令"            # データ駆動: rate 0.80, z 15.88
+      - "日現在"          # データ駆動: rate 0.80
+      - "緊急連絡"
+      - "TEL"
+    regex_patterns:
+      birthdate_slash: ['\d{4}/\d{1,2}/\d{1,2}', 0.4]
+      birthdate_era: ['(昭和|平成)\d+年\d+月\d+日', 0.5]
+      postal_code: ['\d{3}-\d{4}', 0.3]
+    negative_keywords:
+      - "決算"
+      - "貸借対照表"
+      - "損益計算書"
+      - "誓約します"
+      - "工事経歴書"
+      - "貴社"
+    min_score: 3.0
+    confidence_divisor: 5.0
+    confidence_floor: 0.82
+    confidence_ceiling: 0.96
+    extra_checks:
+      birthdate_count_min: 2
+
+  労働安全衛生誓約書:
+    # データ: 「労働安全」 1.09 in heading, 「ことを」「点検」「定期」「重機」「工具」が高識別
+    headings:
+      - "労働安全衛生誓約書"
+      - "労働安全衛生に関する誓約書"
+      - "安全衛生誓約書"
+      - "誓約書"
+      - "労働安全衛生"
+    required_keywords:
+      - "労働安全"        # rate 0.99
+      - "誓約"
+    support_keywords:
+      - "保護帽"
+      - "安全帯"
+      - "ヘルメット"
+      - "災害"
+      - "防止"
+      - "施工"
+      - "貴社の指示"
+      - "命令に従い"
+      - "ことを誓約します"
+      - "誓約します"
+      - "5S"
+      - "整理"
+      - "整頓"
+      - "清掃"
+      - "クレーン"
+      - "足場"
+      - "点検"            # データ駆動: rate 0.95
+      - "定期"            # データ駆動: rate 0.95
+      - "重機"            # データ駆動: rate 0.95
+      - "工具"            # データ駆動: rate 0.95
+      - "パトロール"      # データ駆動: rate 0.71
+      - "喫煙"
+    regex_patterns:
+      safety_title: ['労\s*働\s*安\s*全|衛\s*生\s*誓\s*約|安\s*全\s*衛\s*生\s*誓\s*約', 4.0]
+      pledge: ['ことを誓約', 2.0]
+    negative_keywords:
+      - "決算報告"
+      - "貸借対照表"
+      - "工事経歴書"
+      - "労働者名簿"
+      - "建設業許可番号"
+    min_score: 4.0
+    confidence_divisor: 5.0
+    confidence_floor: 0.85
+    confidence_ceiling: 0.96
+
+  資格略字一覧:
+    # データ: 「資格略字一覧」 0.90, 「作業主任者」 in heading 2.80, 「特車」「特リ」「特ロ」 (略字パターン)
+    headings:
+      - "資格略字一覧"
+      - "資格略字"
+      - "資格者名簿"
+      - "技能者名簿"
+      - "有資格者一覧"
+      - "作業主任者"      # データ駆動: rate 2.80 (頻出)
+    required_keywords:
+      - "資格"            # rate 1.00
+      - "技能講習"        # rate 0.99
+    support_keywords:
+      - "電気工事士"
+      - "電工"
+      - "主任技術者"
+      - "危険物取扱"
+      - "一級建築士"
+      - "二級建築士"
+      - "一級建築施工"
+      - "二級建築施工"
+      - "玉掛"
+      - "クレーン運転"    # データ駆動: rate 0.99
+      - "免許"
+      - "技能講習"
+      - "特別教育"
+      - "高圧室内"
+      - "建築施工管理"
+      - "土木施工管理"
+      - "作業主任"        # データ駆動: rate 2.80
+      - "立て"            # データ駆動: rate 0.99 (足場の組立て等)
+      - "足場の組"
+    regex_patterns:
+      bracket_qualification: ['【\s*免\s*許\s*】|【\s*技\s*能\s*講\s*習\s*】|【\s*特\s*別\s*教\s*育\s*】', 3.0]
+      ryakuji: ['特車|特リ|特ロ|特電|特コ', 1.0]   # データ駆動: 略字パターン
+    negative_keywords:
+      - "決算報告"
+      - "工事経歴書"
+      - "誓約します"
+      - "貸借対照表"
+      - "労働者名簿"
+    min_score: 3.0
+    confidence_divisor: 5.0
+    confidence_floor: 0.82
+    confidence_ceiling: 0.95
+
+  取引先一覧表:
+    # データ: 「取引先」 0.79, 「仕入先」 0.39, 「先一覧」 0.61 - やや弱め
+    # n=95、株式会社のヒット率 3.93 in heading (会社名列)
+    headings:
+      - "主要取引先一覧"
+      - "取引先一覧"
+      - "得意先一覧"
+      - "仕入先一覧"
+      - "取引先名簿"
+      - "主要取引先"
+      - "取引先一覧表"
+    required_keywords:
+      - "取引先"          # rate 0.79
+    support_keywords:
+      - "取引先名"
+      - "取引銀行"
+      - "売上先"
+      - "仕入先"          # データ駆動: rate 0.37 (仕入先一覧時のみ)
+      - "得意先"
+      - "郵便番号"
+      - "住所"
+      - "先一覧"
+      - "業種"
+    regex_patterns:
+      postal_code: ['\d{3}-\d{4}', 0.3]
+      company_form: ['(株式会社|有限会社|\(株\)|㈱|\(有\)|㈲)', 0.3]
+    negative_keywords:
+      - "決算報告"
+      - "誓約します"
+      - "労働者名簿"
+      - "工事経歴書"
+      - "資格略字"
+    min_score: 3.5
+    confidence_divisor: 6.0
+    confidence_floor: 0.78
+    confidence_ceiling: 0.92
+    extra_checks:
+      company_count_min: 3
+
+  会社案内:
+    # データ: n=136、識別力弱い (top distinctive z<10)。「概要」「会社概要」「環境」「本社」「工場」が頼り
+    headings:
+      - "会社案内"
+      - "会社概要"
+      - "会社プロフィール"
+      - "事業案内"
+      - "概要"
+    required_keywords: []
+    support_keywords:
+      - "沿革"
+      - "創立"
+      - "創業"
+      - "設立"
+      - "資本金"
+      - "事業内容"
+      - "役員"
+      - "営業所"
+      - "組織図"
+      - "代表者"
+      - "本社"            # データ駆動: rate 0.26
+      - "支店"
+      - "所在地"
+      - "従業員数"
+      - "売上高"
+      - "工場"            # データ駆動: rate 0.32
+      - "営業"
+      - "概要"            # データ駆動: rate 0.27, logodds 4.06
+      - "環境"
+    regex_patterns: {}
+    negative_keywords:
+      - "誓約します"
+      - "工事経歴書"
+      - "労働者名簿"
+      - "貸借対照表"
+      - "損益計算書"
+      - "(般-"
+      - "(特-"
+    min_score: 3.0
+    confidence_divisor: 5.0
+    confidence_floor: 0.75
+    confidence_ceiling: 0.90
+
+  取引申請書:
+    # データ: 「継続取引」 1.24 in heading (rate 0.71), 「提出書類」 0.81, 「申請」 0.70, 「案内」 0.81
+    headings:
+      - "新規・継続取引申請書"
+      - "新規継続取引申請書"
+      - "新規·継続取引申請書"
+      - "取引申請書"
+      - "御取引条件等説明書"
+      - "取引条件等説明書"
+      - "取引条件・提出書類のご案内"
+      - "取引条件·提出書類のご案内"
+      - "提出書類チェックリスト"
+      - "継続取引"
+    required_keywords: []
+    support_keywords:
+      - "御中"
+      - "申請致します"
+      - "申請日"
+      - "代表者氏名"
+      - "代表者役職"
+      - "金融機関名"
+      - "支店"
+      - "口座番号"
+      - "フリガナ"
+      - "業者NO"
+      - "取引説明書"
+      - "提出先"
+      - "提出書類"        # データ駆動: rate 0.81
+      - "新規"            # rate 0.73
+      - "継続"            # rate 0.71
+      - "添付"            # データ駆動: rate 0.66, z 15.18
+      - "案内"            # データ駆動: rate 0.81
+      - "申請"            # rate 0.70
+      - "ご提出"
+      - "貴社"
+    regex_patterns:
+      application_title: ['新\s*規[\s·・\-]*継\s*続\s*取\s*引', 4.0]
+      submit_doc: ['取\s*引\s*条\s*件\s*等\s*説\s*明\s*書', 4.0]
+      checklist: ['提\s*出\s*書\s*類\s*チェック', 2.5]
+    negative_keywords:
+      - "貸借対照表"
+      - "損益計算書"
+      - "工事経歴書"
+      - "労働者名簿"
+      - "誓約します"
+      - "(般-"
+      - "(特-"
+    min_score: 3.0
+    confidence_divisor: 5.0
+    confidence_floor: 0.80
+    confidence_ceiling: 0.94
