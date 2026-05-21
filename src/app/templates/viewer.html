@@ -5,6 +5,20 @@
 <style>
 /* Viewer-specific layout overrides */
 main { padding: 0 !important; height: calc(100vh - 48px); overflow: hidden; }
+.app-title, header h1 { font-size: 13px !important; padding: 2px 8px !important; line-height: 1.2 !important; }
+#company-selector { padding: 4px 6px !important; }
+#company-nav-back { font-size: 11px !important; line-height: 1.1 !important; display:inline-block; margin-bottom: 2px; }
+.company-nav-row { margin-top: 2px !important; }
+.company-nav-row .nav-btn { padding: 2px 6px !important; font-size: 11px !important; }
+#company-select { font-size: 11px !important; padding: 2px 4px !important; }
+.nav-filter-row { margin-top: 3px !important; gap: 2px !important; }
+.nav-filter-btn { padding: 1px 4px !important; font-size: 9px !important; }
+#nav-position { font-size: 10px !important; margin-top: 2px !important; line-height: 1.1 !important; }
+#company-selector .info, #page-count-info { margin-top: 2px !important; line-height: 1.1 !important; font-size: 10px !important; }
+#missing-docs { font-size: 10px !important; margin-top: 2px !important; line-height: 1.2 !important; padding: 2px 4px !important; }
+#review-queue-panel { margin-top: 4px !important; padding: 4px !important; }
+#review-queue-panel strong { font-size: 10px !important; }
+#review-queue-panel .rot-btn { padding: 2px 4px !important; font-size: 10px !important; }
 </style>
 {% endblock %}
 
@@ -50,6 +64,14 @@ main { padding: 0 !important; height: calc(100vh - 48px); overflow: hidden; }
             <div style="display:flex;gap:4px;margin-top:4px;">
                 <button class="rot-btn" onclick="jumpNextOcrMismatch()" style="background:#7cd1ff;border-color:#7cd1ff;color:#000;flex:1;font-size:11px;">➡ 次の不一致へ</button>
                 <button class="rot-btn" onclick="openOcrMismatchList()" style="flex:0.6;font-size:11px;">一覧</button>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;border-top:1px solid #334;padding-top:6px;">
+                <strong style="color:#aef99e;font-size:11px;">🧬 FP 不一致</strong>
+                <span id="fp-mismatch-count" style="font-size:10px;color:#aaa;">-</span>
+            </div>
+            <div style="display:flex;gap:4px;margin-top:4px;">
+                <button class="rot-btn" onclick="jumpNextFpMismatch()" style="background:#aef99e;border-color:#aef99e;color:#000;flex:1;font-size:11px;">➡ 次の不一致へ</button>
+                <button class="rot-btn" onclick="openFpMismatchList()" style="flex:0.6;font-size:11px;">パターン一覧</button>
             </div>
         </div>
     </div>
@@ -379,6 +401,7 @@ function updatePanel() {
 
     // Doc type dropdown
     const currentType = pg.doc_type_name || '不明';
+    const currentSecondary = pg.doc_type_secondary || '';
     html += '<div class="panel-section"><h3>書類種別</h3>';
     html += '<div class="panel-value">';
     html += '<select id="doc-type-select" onchange="saveDocType(this.value)" class="panel-select">';
@@ -386,10 +409,23 @@ function updatePanel() {
         const sel = (dt === currentType) ? ' selected' : '';
         html += '<option value="' + dt + '"' + sel + '>' + dt + '</option>';
     });
-    // If current type is not in DOC_TYPES, add it
     if (!DOC_TYPES.includes(currentType)) {
         html += '<option value="' + currentType + '" selected>' + currentType + '</option>';
     }
+    html += '</select>';
+    if (currentSecondary) {
+        html += ' <span style="background:' + (BADGE_COLORS[currentSecondary] || '#607d8b') + ';color:#fff;padding:2px 6px;border-radius:3px;font-size:10px;margin-left:6px;">+ ' + currentSecondary + '</span>';
+    }
+    html += '</div>';
+    html += '<div class="panel-value" style="margin-top:6px;font-size:11px;">';
+    html += '<span style="color:#888;">副タグ (2種混在):</span> ';
+    html += '<select id="doc-type-secondary-select" onchange="saveDocTypeSecondary(this.value)" class="panel-select" style="font-size:11px;">';
+    html += '<option value="">(なし)</option>';
+    DOC_TYPES.forEach(dt => {
+        if (dt === 'その他/不明') return;
+        const sel = (dt === currentSecondary) ? ' selected' : '';
+        html += '<option value="' + dt + '"' + sel + '>' + dt + '</option>';
+    });
     html += '</select>';
     html += '</div></div>';
 
@@ -604,6 +640,30 @@ async function saveDocType(newType) {
         }
     } catch (e) {
         console.error('saveDocType error:', e);
+    }
+}
+
+// --- Save secondary doc type via API ---
+async function saveDocTypeSecondary(newType) {
+    if (!companyData) return;
+    const pg = companyData.pages[currentPageIdx];
+    try {
+        const resp = await fetch(
+            '/api/pages/' + pg.page_id,
+            {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ doc_type_secondary: newType }),
+            }
+        );
+        if (resp.ok) {
+            const updated = await resp.json();
+            companyData.pages[currentPageIdx] = updated;
+            renderThumbnails();
+            updatePanel();
+        }
+    } catch (e) {
+        console.error('saveDocTypeSecondary error:', e);
     }
 }
 
@@ -853,6 +913,105 @@ async function openOcrMismatchList() {
     document.getElementById('review-modal').style.display = 'block';
 }
 
+// --- Fingerprint 不一致キュー ---
+let fpMismatchQueue = [];
+let fpMismatchTotal = 0;
+let fpMismatchPatterns = [];
+
+async function fetchFpMismatchQueue(pattern, companyId) {
+    try {
+        const params = new URLSearchParams({limit: '2000'});
+        if (pattern) params.set('pattern', pattern);
+        if (companyId) params.set('company_id', companyId);
+        const resp = await fetch('/api/review/fingerprint_mismatch_queue?' + params.toString());
+        if (!resp.ok) return;
+        const data = await resp.json();
+        fpMismatchQueue = data.items || [];
+        fpMismatchTotal = data.total || 0;
+        fpMismatchPatterns = data.patterns || [];
+        const el = document.getElementById('fp-mismatch-count');
+        if (el) el.textContent = fpMismatchTotal + '件';
+    } catch (e) {
+        console.error('fetchFpMismatchQueue:', e);
+    }
+}
+
+async function jumpNextFpMismatch() {
+    await fetchFpMismatchQueue();
+    if (fpMismatchQueue.length === 0) {
+        alert('FP 不一致ページはありません。');
+        return;
+    }
+    let target = null;
+    if (companyData) {
+        const curPid = companyData.pages[currentPageIdx] && companyData.pages[currentPageIdx].page_id;
+        const curIdx = fpMismatchQueue.findIndex(i => i.page_id === curPid);
+        if (curIdx >= 0 && curIdx + 1 < fpMismatchQueue.length) {
+            target = fpMismatchQueue[curIdx + 1];
+        } else {
+            target = fpMismatchQueue[0];
+        }
+    } else {
+        target = fpMismatchQueue[0];
+    }
+    await navigateToPage(target.company_id, target.page_id);
+}
+
+async function openFpMismatchList() {
+    await fetchFpMismatchQueue();
+    const body = document.getElementById('review-modal-body');
+    if (fpMismatchPatterns.length === 0) {
+        body.innerHTML = '<p style="color:#4CAF50;">FP 不一致ページはありません ✓</p>';
+    } else {
+        let html = '<p style="color:#aaa;">計 <strong>' + fpMismatchTotal + '</strong> ページ / ' + fpMismatchPatterns.length + ' パターン</p>';
+        // パターン別集計
+        html += '<h3 style="color:#aef99e;margin-top:8px;font-size:13px;">パターン別 (クリックで絞り込み)</h3>';
+        html += '<table style="width:100%;border-collapse:collapse;margin-bottom:14px;"><thead><tr style="background:#1e2b4d;">';
+        ['#','現分類 → 候補分類','件数','一覧'].forEach(h => {
+            html += '<th style="padding:4px 8px;text-align:left;border-bottom:1px solid #334;color:#aef99e;">' + h + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+        fpMismatchPatterns.forEach((p, i) => {
+            html += '<tr style="border-bottom:1px solid #334;">';
+            html += '<td style="padding:4px 8px;color:#888;">' + (i+1) + '</td>';
+            html += '<td style="padding:4px 8px;"><strong>' + escAttr(p.pattern) + '</strong></td>';
+            html += '<td style="padding:4px 8px;text-align:right;">' + p.count + '</td>';
+            html += '<td style="padding:4px 8px;"><button class="rot-btn" style="font-size:10px;padding:2px 6px;" onclick="filterFpByPattern(\'' + escAttr(p.pattern) + '\')">絞込</button></td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        // ページ一覧
+        if (fpMismatchQueue.length > 0) {
+            html += '<h3 style="color:#aef99e;font-size:13px;">ページ一覧 (上位 ' + Math.min(fpMismatchQueue.length, 100) + ' 件、conf 降順)</h3>';
+            html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#1e2b4d;">';
+            ['#','会社','ファイル','P','現','→ 候補','conf'].forEach(h => {
+                html += '<th style="padding:4px 8px;text-align:left;border-bottom:1px solid #334;color:#aef99e;">' + h + '</th>';
+            });
+            html += '</tr></thead><tbody>';
+            fpMismatchQueue.slice(0, 100).forEach((it, i) => {
+                const conf = (it.confidence * 100).toFixed(0) + '%';
+                html += '<tr style="border-bottom:1px solid #334;cursor:pointer;" onclick="closeReviewModal();navigateToPage(\'' + it.company_id + '\',' + it.page_id + ')">';
+                html += '<td style="padding:4px 8px;color:#888;">' + (i+1) + '</td>';
+                html += '<td style="padding:4px 8px;"><strong>' + it.company_id + '</strong> ' + escAttr(it.official_name) + '</td>';
+                html += '<td style="padding:4px 8px;font-size:11px;">' + escAttr((it.file_name || '').substring(0, 30)) + '</td>';
+                html += '<td style="padding:4px 8px;text-align:center;">p' + it.page_no + '</td>';
+                html += '<td style="padding:4px 8px;"><span style="background:#607d8b;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;">' + escAttr(it.current_doc_type) + '</span></td>';
+                html += '<td style="padding:4px 8px;"><span style="background:#aef99e;color:#000;padding:1px 6px;border-radius:3px;font-size:10px;">' + escAttr(it.predicted_doc_type) + '</span></td>';
+                html += '<td style="padding:4px 8px;">' + conf + '</td>';
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+        }
+        body.innerHTML = html;
+    }
+    document.getElementById('review-modal').style.display = 'block';
+}
+
+async function filterFpByPattern(pattern) {
+    await fetchFpMismatchQueue(pattern);
+    openFpMismatchList();
+}
+
 // --- Auto-load if initial company set ---
 (async function() {
     const params = new URLSearchParams(window.location.search);
@@ -861,6 +1020,7 @@ async function openOcrMismatchList() {
     await fetchNavList(navFilter);
     await fetchReviewQueue();
     await fetchOcrMismatchQueue();
+    await fetchFpMismatchQueue();
 
     const initialId = '{{ initial_company_id | default("") }}';
     if (initialId) {

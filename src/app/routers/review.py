@@ -211,6 +211,97 @@ def confirm_ocr_mismatch(page_id: int):
         conn.close()
 
 
+@router.get("/fingerprint_mismatch_queue")
+def fingerprint_mismatch_queue(
+    limit: int = Query(500, ge=1, le=2000),
+    pattern: str = Query("", description="例: 取引申請書->労働安全衛生誓約書"),
+    company_id: str = Query(""),
+    confidence_min: float = Query(0.85, ge=0.0, le=1.0),
+):
+    """フィンガープリント分類器の予測 vs 現状 doc_type の不一致キュー。
+
+    最新 classification_runs (mode='shadow' or 'promoted') を参照。
+    手動ラベルは除外、low_text も除外、known→different known のみ。
+    confidence 降順で並べる。
+    """
+    conn = get_db()
+    try:
+        run = conn.execute(
+            "SELECT run_id FROM classification_runs ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if not run:
+            return {"total": 0, "items": [], "patterns": []}
+        run_id = run["run_id"]
+
+        rows = conn.execute(
+            """SELECT cc.page_id, cc.predicted_label, cc.confidence,
+                      cc.second_label, cc.second_confidence, cc.evidence_json,
+                      p.company_id, c.official_name, p.file_name, p.page_no,
+                      p.doc_type_name AS current_doc_type
+               FROM classification_candidates cc
+               JOIN pages p USING(page_id)
+               JOIN companies c ON c.company_id = p.company_id
+               WHERE cc.run_id=?
+                 AND cc.manual_locked = 0
+                 AND cc.predicted_label != 'その他/不明'
+                 AND p.doc_type_name != 'その他/不明'
+                 AND p.doc_type_name != cc.predicted_label
+                 AND cc.confidence >= ?
+               ORDER BY cc.confidence DESC""", (run_id, confidence_min)
+        ).fetchall()
+
+        import json as _json
+        items = []
+        pattern_counter: dict[str, int] = {}
+        for r in rows:
+            try:
+                ev = _json.loads(r["evidence_json"] or "{}")
+                tq = ev.get("text_quality", "normal")
+            except Exception:
+                ev = {}
+                tq = "normal"
+            if tq == "low_text":
+                continue
+            cur = r["current_doc_type"]
+            pred = r["predicted_label"]
+            if cur in ("その他/不明", "空白"):
+                continue
+            pat = f"{cur}->{pred}"
+            pattern_counter[pat] = pattern_counter.get(pat, 0) + 1
+            if pattern and pat != pattern:
+                continue
+            if company_id and r["company_id"] != company_id:
+                continue
+            items.append({
+                "page_id": r["page_id"],
+                "company_id": r["company_id"],
+                "official_name": r["official_name"],
+                "file_name": r["file_name"],
+                "page_no": r["page_no"],
+                "current_doc_type": cur,
+                "predicted_doc_type": pred,
+                "confidence": float(r["confidence"]),
+                "second_label": r["second_label"] or "",
+                "second_confidence": float(r["second_confidence"] or 0),
+                "text_quality": tq,
+                "evidence": ev.get("evidence", {}),
+                "pattern": pat,
+            })
+        patterns = sorted(
+            [{"pattern": p, "count": n} for p, n in pattern_counter.items()],
+            key=lambda x: -x["count"]
+        )
+        return {
+            "run_id": run_id,
+            "total": len(items),
+            "limit": limit,
+            "items": items[:limit],
+            "patterns": patterns,
+        }
+    finally:
+        conn.close()
+
+
 @router.get("/sample_null_manual")
 def sample_null_with_manual_history(limit: int = Query(10, ge=1, le=50)):
     """「手動修正履歴あり会社」×「confidence NULL」のページをサンプル出力（B案検証用）"""
@@ -228,3 +319,5 @@ def sample_null_with_manual_history(limit: int = Query(10, ge=1, le=50)):
         return {"items": [dict(r) for r in rows]}
     finally:
         conn.close()
+
+# reload trigger

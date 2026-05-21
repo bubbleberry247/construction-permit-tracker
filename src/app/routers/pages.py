@@ -11,6 +11,7 @@ router = APIRouter(prefix="/api/pages", tags=["pages"])
 
 class PageUpdate(BaseModel):
     doc_type_name: str | None = None
+    doc_type_secondary: str | None = None
     rotation: int | None = None
 
 
@@ -72,6 +73,16 @@ def update_page(page_id: int, body: PageUpdate):
                     ),
                 )
 
+        if body.doc_type_secondary is not None:
+            sec_val = body.doc_type_secondary if body.doc_type_secondary else None
+            updates.append("doc_type_secondary = ?")
+            params.append(sec_val)
+            conn.execute(
+                "INSERT INTO field_reviews (company_id, field_name, confirmed_value, confirmed_by) "
+                "VALUES (?, 'doc_type_secondary', ?, 'web_viewer')",
+                (company_id, sec_val or ""),
+            )
+
         if body.rotation is not None:
             updates.append("rotation = ?")
             params.append(body.rotation)
@@ -92,8 +103,8 @@ def update_page(page_id: int, body: PageUpdate):
         conn.commit()
 
         updated = conn.execute(
-            "SELECT page_id, file_name, page_no, doc_type_name, doc_type_id, "
-            "rotation, confidence FROM pages WHERE page_id = ?",
+            "SELECT page_id, file_name, page_no, doc_type_name, doc_type_secondary, "
+            "doc_type_id, rotation, confidence FROM pages WHERE page_id = ?",
             (page_id,),
         ).fetchone()
         return dict(updated)

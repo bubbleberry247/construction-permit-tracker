@@ -72,6 +72,9 @@
                             <span class="company-id">{{ row.company_id }}</span>
                             {{ row.official_name }}
                         </a>
+                        {% if row.client_badge_class %}
+                        <span class="{{ row.client_badge_class }}" title="{{ row.client_note }}">{{ row.client_badge_label }}</span>
+                        {% endif %}
                     </td>
                     {% for cell in row.cells %}
                     <td class="td-doc">

@@ -31,11 +31,26 @@ def get_page_image(
     if folder is None:
         raise HTTPException(404, f"Company folder not found: {company_id}")
 
-    pdf_path = (folder / filename).resolve()
-    if pdf_path.parent != folder.resolve():
+    if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(400, "Invalid filename")
+
+    pdf_path = folder / filename
     if not pdf_path.is_file():
-        raise HTTPException(404, f"PDF not found: {filename}")
+        for cand in folder.rglob(filename):
+            if cand.is_file():
+                pdf_path = cand
+                break
+        else:
+            raise HTTPException(404, f"PDF not found: {filename}")
+    pdf_path = pdf_path.resolve()
+    if folder.resolve() not in pdf_path.parents and pdf_path.parent != folder.resolve():
+        raise HTTPException(400, "Invalid filename")
+
+    # xlsx 拡張子なら同名 .pdf を優先表示 (xlsx は Excel COM で事前変換済み)
+    if pdf_path.suffix.lower() == ".xlsx":
+        alt_pdf = pdf_path.with_suffix(".pdf")
+        if alt_pdf.is_file():
+            pdf_path = alt_pdf
 
     try:
         doc = fitz.open(str(pdf_path))

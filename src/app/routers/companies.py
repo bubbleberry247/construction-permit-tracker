@@ -28,10 +28,10 @@ def nav_companies(filter: str = Query("all")):
             ).fetchall()
         )
 
-        # Doc types per company
+        # Doc types per company (is_active=1 のみ)
         page_counts = conn.execute(
             "SELECT company_id, doc_type_name, COUNT(*) AS cnt "
-            "FROM pages GROUP BY company_id, doc_type_name"
+            "FROM pages WHERE is_active = 1 GROUP BY company_id, doc_type_name"
         ).fetchall()
 
         doc_map: dict[str, set[str]] = {}
@@ -99,10 +99,11 @@ def get_company(company_id: str):
         if comp is None:
             raise HTTPException(404, f"Company not found: {company_id}")
 
-        # Pages
+        # Pages (is_active=1 のみ; quarantine された重複ページを除外)
         pages = conn.execute(
-            "SELECT page_id, file_name, page_no, doc_type_name, doc_type_id, "
-            "rotation, confidence FROM pages WHERE company_id = ? "
+            "SELECT page_id, file_name, page_no, doc_type_name, doc_type_secondary, "
+            "doc_type_id, rotation, confidence FROM pages "
+            "WHERE company_id = ? AND is_active = 1 "
             "ORDER BY file_name, page_no",
             (company_id,),
         ).fetchall()

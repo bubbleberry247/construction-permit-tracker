@@ -1,3 +1,19 @@
+/* === Client review status badges (3 種類のみ) === */
+.badge-client-confirmed,
+.badge-client-action,
+.badge-client-closed {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: bold;
+    vertical-align: middle;
+}
+.badge-client-confirmed { background: #28a745; color: #fff; }   /* 確認済 */
+.badge-client-action    { background: #ffc107; color: #000; }   /* 要対応 */
+.badge-client-closed    { background: #2196F3; color: #fff; }   /* 対応完了 */
+
 /* === Global Reset & Dark Theme === */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
