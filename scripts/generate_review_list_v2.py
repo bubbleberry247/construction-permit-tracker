@@ -1,5 +1,5 @@
 """
-マスタ145社主軸の一覧表 v2 を生成（藤田さん納品用 改訂版）。
+マスタ145社主軸の一覧表 v2 を生成（納品用 改訂版）。
 
 方針: マスタ145社のみが管理対象。マスタ外の DB レコードは納品物から除外。
 
@@ -49,10 +49,15 @@ REQUIRED_DOCS = [
 # 例: 三和シャッターは工事経歴書を業務上提出不可と回答 (2026-04-24)
 # 将来複数社で発生したら DB テーブル化を検討
 COMPANY_NOTES = {
-    "C0008": "藤田: 工事経歴書 三和側ポリシーで提出不可 (2026-04-24 確定)",
-    "C0060": "藤田: 工事経歴書 お断り、書類不備のまま審査へ",
-    "C0029": "藤田: 取引申請書・誓約書 4/10メールに添付あり",
-    "C0023": "藤田: 決算書・工事経歴書・取引先一覧 3/28メールに添付あり",
+    "C0008": "客先確認: 工事経歴書 三和側ポリシーで提出不可 (2026-04-24 確定)",
+    "C0060": "客先確認: 工事経歴書 お断り、書類不備のまま審査へ",
+    "C0023": "客先確認: 決算書・工事経歴書・取引先一覧 3/28メールに添付あり",
+    # 2026-05-12 客先 5/11 指摘への対応完了
+    "C0029": "5/12 取引申請書・誓約書 ファイル差し替え完了 (受領追加記入版を反映)",
+    "C0065": "建設業許可証 無し (業種自己申告のみで有効、5/11 客先確認済)",
+    "C0067": "客先 5/11 確認済: 許可証同等資料 OK",
+    "C0131": "客先 5/11 確認済: 問題なし",
+    "C0143": "客先 5/11 確認済: 決算書・工事経歴書 提出拒否(書類不備のまま審査)",
 }
 
 
@@ -77,15 +82,16 @@ def fetch_company_details(conn: sqlite3.Connection, company_id: str) -> dict:
     ).fetchone()
 
     # 主分類 + 副分類の両方を集計（1ページ2タブ対応、migration 005）
+    # is_active=1 のみを対象 (migration 009 quarantine された pages は除外)
     doc_types = set()
     for r in cur.execute(
-        "SELECT DISTINCT doc_type_name FROM pages WHERE company_id=?", (company_id,)
+        "SELECT DISTINCT doc_type_name FROM pages WHERE company_id=? AND is_active=1", (company_id,)
     ):
         if r[0]:
             doc_types.add(r[0])
     for r in cur.execute(
         "SELECT DISTINCT doc_type_secondary FROM pages "
-        "WHERE company_id=? AND doc_type_secondary IS NOT NULL", (company_id,)
+        "WHERE company_id=? AND doc_type_secondary IS NOT NULL AND is_active=1", (company_id,)
     ):
         if r[0]:
             doc_types.add(r[0])
@@ -193,6 +199,14 @@ def write_main_sheet(wb, master_rows, conn, matched_map):
             ]
             row.extend([details["doc_checks"][dt] for dt in REQUIRED_DOCS])
             note = COMPANY_NOTES.get(d["company_id"], "")
+            # field_reviews から permit_renewal_note を取得
+            rn = conn.execute(
+                "SELECT confirmed_value FROM field_reviews "
+                "WHERE company_id=? AND field_name='permit_renewal_note' "
+                "ORDER BY reviewed_at DESC LIMIT 1", (d["company_id"],)
+            ).fetchone()
+            if rn and rn[0]:
+                note = (note + " | " + rn[0]) if note else rn[0]
             if details["exempts"]:
                 ex_note = "対象外: " + "/".join(sorted(details["exempts"]))
                 note = (note + " | " + ex_note) if note else ex_note

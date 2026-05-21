@@ -31,3 +31,4 @@ plans/
 # ローカル設定・ツールキャッシュ
 .claude/settings.local.json
 .playwright-mcp/
+src/uvicorn
