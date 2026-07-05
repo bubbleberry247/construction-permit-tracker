@@ -1,0 +1,43 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - progressbar [ref=e6]
+      - main [ref=e14]:
+        - generic [ref=e15]:
+          - img [ref=e18]
+          - generic [ref=e23]:
+            - heading "ログイン" [level=1] [ref=e24]
+            - generic [ref=e25]: お客様の Google アカウントを使用
+        - generic [ref=e28]:
+          - generic [ref=e33]:
+            - generic [ref=e38]:
+              - textbox "メールアドレスまたは電話番号" [active] [ref=e39]
+              - generic: メールアドレスまたは電話番号
+            - button "メールアドレスを忘れた場合" [ref=e43] [cursor=pointer]
+          - generic [ref=e46]:
+            - text: ご自分のパソコンでない場合は、ゲストモードを使用して非公開でログインしてください。
+            - link "ゲストモードの使い方の詳細" [ref=e47] [cursor=pointer]:
+              - /url: https://support.google.com/chrome/answer/6130773?hl=ja
+        - generic [ref=e49]:
+          - button "次へ" [ref=e53]:
+            - generic [ref=e56]: 次へ
+          - button "アカウントを作成" [ref=e62]:
+            - generic [ref=e65]: アカウントを作成
+    - contentinfo [ref=e69]:
+      - combobox "言語の変更 日本語" [ref=e73] [cursor=pointer]:
+        - generic:
+          - generic: 日本語
+        - generic:
+          - img
+      - list [ref=e75]:
+        - listitem [ref=e76]:
+          - link "ヘルプ" [ref=e77] [cursor=pointer]:
+            - /url: https://support.google.com/accounts?hl=ja&p=account_iph
+        - listitem [ref=e78]:
+          - link "プライバシー" [ref=e79] [cursor=pointer]:
+            - /url: https://accounts.google.com/TOS?loc=JP&hl=ja&privacy=true
+        - listitem [ref=e80]:
+          - link "規約" [ref=e81] [cursor=pointer]:
+            - /url: https://accounts.google.com/TOS?loc=JP&hl=ja
+  - iframe [ref=e82]:
+    
