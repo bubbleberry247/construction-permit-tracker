@@ -4,10 +4,10 @@
 
 - 実行日: 2026-07-30 JST
 - 対象: Phase 0-B / P1（誤送信・外部通知起動防止）
-- 本番環境: 未変更
-- 本番デプロイ: 未実施
+- 隔離テスト中の本番環境: 未変更
+- 最終本番デプロイ: 実施済み（バージョン24）
 - 本番トリガー: 0件を維持
-- 実メール送信: 実施していない
+- 実メール送信: 0件
 
 ## 2. テスト用アーティファクト
 
@@ -370,3 +370,83 @@ flush修正後のfresh-context最終レビューを完了。
 
 GR-005は`APPROVE / GO`。
 本番直前条件の再確認後、Phase 0-B安全機能だけを反映できる。
+
+## 22. 本番直前確認
+
+- 実施日時: 2026-07-30 02:35〜02:40 JST
+- Config:
+  - `ENABLE_SEND=FALSE`
+  - `NOTIFY_STAGES_DAYS`は文字列`90,60,30,0`
+  - `GMAIL_DAILY_LIMIT=150`
+- Notifications: ヘッダのみ
+- Gmail SENT検索:
+  - 2026-04-01以降
+  - 建設業許可、許可期限、受領確認、期限通知
+  - 0件
+- 既存Webデプロイ:
+  - バージョン23
+  - `access=MYSELF`
+  - `executeAs=USER_DEPLOYING`
+- CookieなしHTTPアクセス: Googleログインへ302
+- Apps ScriptバックアップZIP:
+  - SHA-256:
+    `6C4702EA890C21676E8B7B68D7B65A6A2F41B4F6691121B85278B4A4A75CFCFF`
+  - 記録値と一致
+- 本番HEAD fresh clone: 19ファイル
+- バージョン23退避ソースとの差分:
+  - `appsscript.json`の`ANYONE → MYSELF`のみ
+  - Phase 0-A封じ込めの意図した差分
+
+直前再テスト:
+
+- Phase 0-B専用テスト: 30件合格
+- 既存Python回帰テスト: 395件合格
+- GAS構文: 17ファイル成功
+- `git diff --check`: 成功
+- push対象: 19ファイル
+
+## 23. 本番反映
+
+- 実施日時: 2026-07-30 02:40〜02:41 JST
+- 本番Apps Script HEADへ19ファイルをpush: 成功
+- push後fresh clone: 19ファイル
+- レビュー済みブランチとの正規化比較: `AllNormalizedEqual=True`
+- 作成バージョン: 24
+- 説明: `v24: Phase 0-B notification safety gate`
+- 更新した既存デプロイ:
+  `AKfycbwYJIHfhZ6HBzfNlv2MRl1H3ZqaVMzYBv9KOIMebrQGJ5ftAl3rNymX1KmjjtVtagn1`
+- デプロイ更新結果: `@24`
+
+## 24. 本番反映後確認
+
+- Apps Script API:
+  - アクティブWebデプロイ: バージョン24
+  - `access=MYSELF`
+  - `executeAs=USER_DEPLOYING`
+- fresh-context独立担当による本番管理画面再確認:
+  - バージョン24
+  - アクセスできるユーザー: 自分のみ
+  - 次のユーザーとして実行: 自分
+  - インストール型トリガー: 0件
+- CookieなしHTTPアクセス:
+  - HTTP 302
+  - `accounts.google.com`へリダイレクト
+- Config:
+  - `ENABLE_SEND=FALSE`
+  - `NOTIFY_STAGES_DAYS=90,60,30,0`
+- Notifications: ヘッダのみ
+- Gmail SENT検索: 対象0件
+- 客先公開: 未実施
+- 会社マスタ編集機能: 未実施
+- 送信有効化: 未実施
+- 実メール送信: 0件
+
+## 25. 現在の判定
+
+- Phase 0-A: 完了
+- Phase 0-B / P1: 本番反映完了
+- 本番Webデプロイ: バージョン24、所有者本人のみ
+- インストール型トリガー: 0件
+- 顧客担当者向け公開: 未許可
+- 会社マスタ更新: 未許可
+- 通知メール: 停止継続
