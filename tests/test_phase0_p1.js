@@ -51,6 +51,7 @@ function createUtilsContext(configOverrides) {
       log: (...args) => consoleMessages.push(['log', ...args])
     },
     getConfig: key => Object.prototype.hasOwnProperty.call(config, key) ? config[key] : '',
+    reloadConfigAll_: () => Object.assign({}, config),
     NotificationsModel: {
       create(data) {
         const row = Object.assign({}, data, {
@@ -90,7 +91,8 @@ function createUtilsContext(configOverrides) {
     },
     Utilities: {
       getUuid: () => 'UUID',
-      formatDate: () => '2026/07/30'
+      formatDate: (_date, _timezone, format) =>
+        format === 'yyyy-MM' ? '2026-07' : '2026/07/30'
     }
   };
   context.logError = (message, error) => {
@@ -165,6 +167,56 @@ test('ENABLE_SEND=FALSEでは送信せずBLOCKEDを記録する', () => {
   assert.equal(result.result, 'BLOCKED_SEND_DISABLED');
   assert.equal(context.__state.sentEmails.length, 0);
   assert.equal(context.__state.notifications[0].result, 'BLOCKED_SEND_DISABLED');
+});
+
+test('ロック待機中にENABLE_SENDがTRUEからFALSEへ変わった場合はfresh Configで送信停止する', () => {
+  const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
+  const sheetConfig = {
+    ENABLE_SEND: 'TRUE',
+    GMAIL_DAILY_LIMIT: '150',
+    ADMIN_EMAILS: 'admin@example.com',
+    NOTIFY_STAGES_DAYS: '90,60,30,0'
+  };
+  context.SpreadsheetApp = {
+    getActiveSpreadsheet: () => ({
+      getSheetByName: name => name === 'Config'
+        ? {
+            getDataRange: () => ({
+              getValues: () => [
+                ['key', 'value'],
+                ...Object.entries(sheetConfig)
+              ]
+            })
+          }
+        : null
+    })
+  };
+  vm.runInContext(readSource('Config.gs'), context, { filename: 'Config.gs' });
+
+  // 最初の判定が読む実行内キャッシュにはTRUEを保持させる。
+  assert.equal(context.getConfig('ENABLE_SEND'), 'TRUE');
+  context.LockService = {
+    getScriptLock: () => ({
+      tryLock() {
+        // ロック待機中に運用者が緊急停止した状況を再現。
+        sheetConfig.ENABLE_SEND = 'FALSE';
+        return true;
+      },
+      releaseLock() {}
+    })
+  };
+
+  const result = context.sendSystemEmail_({
+    to: 'vendor@example.com',
+    subject: 'subject',
+    body: 'body',
+    options: {},
+    notification: { permit_id: 'P-CACHE', stage: '90' }
+  });
+
+  assert.equal(result.result, 'BLOCKED_SEND_DISABLED');
+  assert.equal(context.__state.sentEmails.length, 0);
+  assert.equal(context.CONFIG_CACHE_.ENABLE_SEND, 'FALSE');
 });
 
 test('日次上限の不正値は安全側に倒して送信しない', () => {
@@ -291,6 +343,38 @@ test('送信成功後にSENT更新が失敗してPENDINGが残っても次回は
   assert.equal(second.sent, false);
   assert.equal(second.result, 'BLOCKED_DUPLICATE_RESERVATION');
   assert.equal(context.__state.sentEmails.length, 1);
+});
+
+test('月次サマリーは月別冪等キーを持ち、PENDING残留時も同月に再送しない', () => {
+  const context = createUtilsContext({
+    ENABLE_SEND: 'TRUE',
+    ADMIN_EMAILS: 'admin@example.com'
+  });
+  context.PermitsModel = { getAllActive: () => [] };
+  context.CompaniesModel = { findById: () => null };
+  vm.runInContext(readSource('Mailer.gs'), context, { filename: 'Mailer.gs' });
+  context.NotificationsModel.updateById = () => {
+    throw new Error('update unavailable');
+  };
+
+  const first = context.Mailer.sendMonthlySummary();
+  const second = context.Mailer.sendMonthlySummary();
+
+  assert.equal(first.sent, true);
+  assert.equal(context.__state.notifications[0].permit_id, 'MONTHLY:2026-07');
+  assert.equal(context.__state.notifications[0].result, 'PENDING');
+  assert.equal(second.result, 'BLOCKED_DUPLICATE_RESERVATION');
+  assert.equal(context.__state.sentEmails.length, 1);
+});
+
+test('permitを持たないERROR_ALERTは繰り返し可能イベントとして重複許可する', () => {
+  const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
+  const first = context.sendErrorAlert_('one', 'detail');
+  const second = context.sendErrorAlert_('two', 'detail');
+
+  assert.equal(first.result, 'SENT');
+  assert.equal(second.result, 'SENT');
+  assert.equal(context.__state.sentEmails.length, 2);
 });
 
 test('FAILEDは再試行可能で、PENDINGとSENTだけが重複送信を止める', () => {
@@ -473,6 +557,7 @@ test('危険な通知入口は公開トップレベル関数として残さな�
   const ui = readSource('Ui.gs');
   const api = readSource('api.gs');
   const index = readSource('index.html');
+  const logic = readSource('logic.gs');
   assert.doesNotMatch(utils, /function\s+sendErrorAlert\s*\(/);
   assert.match(utils, /function\s+sendErrorAlert_\s*\(/);
   assert.doesNotMatch(scheduler, /function\s+runDailyNotifications\s*\(/);
@@ -485,6 +570,7 @@ test('危険な通知入口は公開トップレベル関数として残さな�
   assert.doesNotMatch(api, /function\s+apiSendNotification\s*\(/);
   assert.doesNotMatch(index, /今すぐ通知送信/);
   assert.doesNotMatch(index, /function\s+sendNotification\s*\(/);
+  assert.doesNotMatch(logic, /function\s+sendManualNotification_\s*\(/);
 });
 
 test('Phase 0中の危険メニューを表示しない', () => {

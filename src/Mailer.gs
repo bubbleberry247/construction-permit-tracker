@@ -252,6 +252,9 @@ var Mailer = {
     if (recipients.length === 0) return;
     var mailOptions = {};
     if (recipients.length > 1) mailOptions.cc = recipients.slice(1).join(',');
+    // permit_id列を非permit通知の冪等キーにも利用する。
+    // 同じ月のPENDING/SENTがあれば中央送信ゲートが自動再送を止める。
+    var monthlyIdempotencyKey = 'MONTHLY:' + formatDate(today, 'yyyy-MM');
 
     return sendSystemEmail_({
       to: recipients[0],
@@ -260,7 +263,7 @@ var Mailer = {
       options: mailOptions,
       notification: {
         company_id: '',
-        permit_id: '',
+        permit_id: monthlyIdempotencyKey,
         to_email: recipients[0],
         cc_email: mailOptions.cc || '',
         stage: 'MONTHLY',

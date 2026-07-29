@@ -57,10 +57,14 @@ function daysUntil(targetDate) {
 /**
  * ENABLE_SEND が明示的な TRUE の場合だけ送信を許可する。
  * 空欄、未設定、不正値、1、FALSE はすべて false。
+ * @param {Object} [configSnapshot] 同一判定内で使うConfig snapshot
  * @return {boolean}
  */
-function isSendEnabled_() {
-  return String(getConfig('ENABLE_SEND') || '').trim().toUpperCase() === 'TRUE';
+function isSendEnabled_(configSnapshot) {
+  var value = configSnapshot && configSnapshot.ENABLE_SEND !== undefined
+    ? configSnapshot.ENABLE_SEND
+    : getConfig('ENABLE_SEND');
+  return String(value || '').trim().toUpperCase() === 'TRUE';
 }
 
 /**
@@ -99,10 +103,14 @@ function parseNotifyStages_(rawValue) {
 /**
  * Config上の日次送信上限を厳密に取得する。
  * 未設定・不正値は安全側に倒して例外とする。
+ * @param {Object} [configSnapshot] 同一判定内で使うConfig snapshot
  * @return {number}
  */
-function getConfiguredDailySendLimit_() {
-  var raw = String(getConfig('GMAIL_DAILY_LIMIT') || '').trim();
+function getConfiguredDailySendLimit_(configSnapshot) {
+  var value = configSnapshot && configSnapshot.GMAIL_DAILY_LIMIT !== undefined
+    ? configSnapshot.GMAIL_DAILY_LIMIT
+    : getConfig('GMAIL_DAILY_LIMIT');
+  var raw = String(value || '').trim();
   if (!/^\d+$/.test(raw)) {
     throw new Error('GMAIL_DAILY_LIMITが未設定または不正です');
   }
@@ -238,8 +246,20 @@ function sendSystemEmail_(params) {
   }
 
   try {
-    // ロック待機中に設定が変更された場合も安全側に倒す。
-    if (!isSendEnabled_()) {
+    // ロック取得後にConfigシートを強制再読込する。
+    // 実行内キャッシュが古いTRUEを保持していても、停止操作を送信前に反映する。
+    var freshConfig;
+    try {
+      freshConfig = reloadConfigAll_();
+    } catch (configLoadErr) {
+      return recordBlockedNotification_(
+        notificationData,
+        'BLOCKED_CONFIG',
+        'Configを再読込できません: ' +
+          (configLoadErr.message || String(configLoadErr))
+      );
+    }
+    if (!isSendEnabled_(freshConfig)) {
       return recordBlockedNotification_(
         notificationData,
         'BLOCKED_SEND_DISABLED',
@@ -249,7 +269,7 @@ function sendSystemEmail_(params) {
 
     var configuredLimit;
     try {
-      configuredLimit = getConfiguredDailySendLimit_();
+      configuredLimit = getConfiguredDailySendLimit_(freshConfig);
     } catch (configErr) {
       return recordBlockedNotification_(
         notificationData,

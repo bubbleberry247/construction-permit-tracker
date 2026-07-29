@@ -37,6 +37,16 @@ function getConfig(key) {
 }
 
 /**
+ * Configシートを強制再読込し、その実行時点のsnapshotを返す。
+ * 送信ロック取得後の安全条件再確認など、キャッシュを使えない箇所で使用する。
+ * @return {Object} key → value のオブジェクト
+ */
+function reloadConfigAll_() {
+  CONFIG_CACHE_ = null;
+  return loadConfigAll_();
+}
+
+/**
  * 必須キーが全て設定されているか検証する
  * @return {string[]} 未設定のキー一覧（全て揃っていれば空配列）
  */
