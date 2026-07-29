@@ -179,6 +179,24 @@ function recordBlockedNotification_(notificationData, result, message) {
 }
 
 /**
+ * Spreadsheet Serviceの保留中変更を確定する。
+ * @param {string} phase ログ用の処理段階
+ * @return {{success: boolean, message: string}}
+ */
+function flushSpreadsheetWrites_(phase) {
+  try {
+    SpreadsheetApp.flush();
+    return { success: true, message: '' };
+  } catch (flushErr) {
+    var message = flushErr.message || String(flushErr);
+    console.error(
+      'Spreadsheet flush失敗 (' + String(phase || 'unknown') + '): ' + message
+    );
+    return { success: false, message: message };
+  }
+}
+
+/**
  * システム内の全メール送信を通す共通ゲート。
  * ENABLE_SEND、設定上限、Gmail実残量、intent logを順に確認する。
  * @param {{
@@ -245,6 +263,7 @@ function sendSystemEmail_(params) {
     );
   }
 
+  var finalStateFlushed = false;
   try {
     // ロック取得後にConfigシートを強制再読込する。
     // 実行内キャッシュが古いTRUEを保持していても、停止操作を送信前に反映する。
@@ -359,19 +378,46 @@ function sendSystemEmail_(params) {
     }
     var notificationId = created.notification_id;
 
+    // intentをGmail送信前に確定する。flush失敗時はメールを送らない。
+    var intentFlush = flushSpreadsheetWrites_('PENDING before Gmail');
+    if (!intentFlush.success) {
+      return {
+        success: false,
+        sent: false,
+        blocked: true,
+        result: 'BLOCKED_LOG_FAILURE',
+        message: 'PENDINGを確定できないため送信しません: ' + intentFlush.message,
+        notificationId: notificationId
+      };
+    }
+
     try {
       GmailApp.sendEmail(to, subject, body, options);
     } catch (sendErr) {
+      var failedLogUpdated = false;
+      var failedLogError = '';
       try {
-        NotificationsModel.updateById(notificationId, {
+        failedLogUpdated = NotificationsModel.updateById(notificationId, {
           result: 'FAILED',
           error_message: sendErr.message || String(sendErr)
         });
+        if (!failedLogUpdated) {
+          failedLogError = 'notification_idが見つかりません';
+        }
       } catch (failedLogErr) {
+        failedLogError = failedLogErr.message || String(failedLogErr);
         console.error(
           '送信失敗後のNotifications更新にも失敗しました: ' +
-            (failedLogErr.message || String(failedLogErr))
+            failedLogError
         );
+      }
+      var failedFlush = flushSpreadsheetWrites_('FAILED before lock release');
+      finalStateFlushed = failedFlush.success;
+      if (!failedFlush.success) {
+        failedLogUpdated = false;
+        failedLogError = failedLogError
+          ? failedLogError + '; flush: ' + failedFlush.message
+          : 'flush: ' + failedFlush.message;
       }
       logError('メール送信エラー', sendErr);
       return {
@@ -380,7 +426,9 @@ function sendSystemEmail_(params) {
         blocked: false,
         result: 'FAILED',
         message: sendErr.message || String(sendErr),
-        notificationId: notificationId
+        notificationId: notificationId,
+        logUpdated: failedLogUpdated,
+        logError: failedLogError
       };
     }
 
@@ -404,6 +452,14 @@ function sendSystemEmail_(params) {
           notificationId + ' ' + sentLogError
       );
     }
+    var sentFlush = flushSpreadsheetWrites_('SENT before lock release');
+    finalStateFlushed = sentFlush.success;
+    if (!sentFlush.success) {
+      sentLogUpdated = false;
+      sentLogError = sentLogError
+        ? sentLogError + '; flush: ' + sentFlush.message
+        : 'flush: ' + sentFlush.message;
+    }
 
     return {
       success: true,
@@ -415,6 +471,10 @@ function sendSystemEmail_(params) {
       logError: sentLogError
     };
   } finally {
+    // BLOCKED系や結果flush失敗時も、ロックを解放する前に最後の確定を試みる。
+    if (!finalStateFlushed) {
+      flushSpreadsheetWrites_('final before lock release');
+    }
     try {
       sendLock.releaseLock();
     } catch (releaseErr) {

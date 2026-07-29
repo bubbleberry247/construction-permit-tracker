@@ -22,6 +22,7 @@ function createUtilsContext(configOverrides) {
   const notifications = [];
   const sentEmails = [];
   const consoleMessages = [];
+  const operationEvents = [];
   let providerQuota = 100;
   let sendLockHeld = false;
 
@@ -32,6 +33,7 @@ function createUtilsContext(configOverrides) {
       return true;
     },
     releaseLock() {
+      operationEvents.push('release');
       sendLockHeld = false;
     }
   };
@@ -54,6 +56,7 @@ function createUtilsContext(configOverrides) {
     reloadConfigAll_: () => Object.assign({}, config),
     NotificationsModel: {
       create(data) {
+        operationEvents.push(`create:${data.result}`);
         const row = Object.assign({}, data, {
           notification_id: data.notification_id || `N-${notifications.length + 1}`,
           sent_at: data.sent_at || new Date()
@@ -62,6 +65,7 @@ function createUtilsContext(configOverrides) {
         return row;
       },
       updateById(id, updates) {
+        operationEvents.push(`update:${updates.result || ''}`);
         const row = notifications.find(item => item.notification_id === id);
         if (!row) return false;
         Object.assign(row, updates);
@@ -86,7 +90,13 @@ function createUtilsContext(configOverrides) {
     },
     GmailApp: {
       sendEmail(to, subject, body, options) {
+        operationEvents.push('gmail');
         sentEmails.push({ to, subject, body, options });
+      }
+    },
+    SpreadsheetApp: {
+      flush() {
+        operationEvents.push('flush');
       }
     },
     Utilities: {
@@ -103,6 +113,7 @@ function createUtilsContext(configOverrides) {
     notifications,
     sentEmails,
     consoleMessages,
+    operationEvents,
     isSendLockHeld() {
       return sendLockHeld;
     },
@@ -178,6 +189,9 @@ test('ロック待機中にENABLE_SENDがTRUEからFALSEへ変わった場合は
     NOTIFY_STAGES_DAYS: '90,60,30,0'
   };
   context.SpreadsheetApp = {
+    flush() {
+      context.__state.operationEvents.push('flush');
+    },
     getActiveSpreadsheet: () => ({
       getSheetByName: name => name === 'Config'
         ? {
@@ -304,6 +318,94 @@ test('PENDING記録失敗時はメールを送らない', () => {
   assert.equal(context.__state.sentEmails.length, 0);
 });
 
+test('PENDINGをflushできない場合はGmailを呼ばない', () => {
+  const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
+  context.SpreadsheetApp.flush = () => {
+    context.__state.operationEvents.push('flush:error');
+    throw new Error('flush unavailable');
+  };
+  const result = context.sendSystemEmail_({
+    to: 'vendor@example.com',
+    subject: 'subject',
+    body: 'body',
+    options: {},
+    notification: { permit_id: 'P-FLUSH', stage: '90' }
+  });
+
+  assert.equal(result.result, 'BLOCKED_LOG_FAILURE');
+  assert.equal(result.sent, false);
+  assert.equal(context.__state.sentEmails.length, 0);
+  assert.equal(context.__state.notifications[0].result, 'PENDING');
+});
+
+test('PENDING flushはGmail前、結果flushはScriptLock解放前に実行する', () => {
+  const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
+  const result = context.sendSystemEmail_({
+    to: 'vendor@example.com',
+    subject: 'subject',
+    body: 'body',
+    options: {},
+    notification: { permit_id: 'P-ORDER', stage: '90' }
+  });
+
+  assert.equal(result.result, 'SENT');
+  assert.deepEqual(
+    context.__state.operationEvents,
+    ['create:PENDING', 'flush', 'gmail', 'update:SENT', 'flush', 'release']
+  );
+});
+
+test('遅延commitのNotificationsでもpre-send flush後のPENDINGが次回送信を止める', () => {
+  const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
+  const persisted = [];
+  let staged = null;
+  context.NotificationsModel = {
+    create(data) {
+      staged = Object.assign({}, data, {
+        notification_id: 'N-DELAYED',
+        sent_at: new Date()
+      });
+      context.__state.operationEvents.push('create:PENDING');
+      return staged;
+    },
+    updateById() {
+      throw new Error('SENT update unavailable');
+    },
+    countReservedOrSentToday() {
+      return persisted.filter(row => row.result === 'PENDING' || row.result === 'SENT').length;
+    },
+    hasBeenReservedOrSent(permitId, stage) {
+      return persisted.some(row =>
+        row.permit_id === permitId &&
+        row.stage === stage &&
+        (row.result === 'PENDING' || row.result === 'SENT')
+      );
+    }
+  };
+  context.SpreadsheetApp.flush = () => {
+    context.__state.operationEvents.push('flush');
+    if (staged) {
+      persisted.push(staged);
+      staged = null;
+    }
+  };
+  const params = {
+    to: 'vendor@example.com',
+    subject: 'subject',
+    body: 'body',
+    options: {},
+    notification: { permit_id: 'P-DELAYED', stage: '90' }
+  };
+
+  const first = context.sendSystemEmail_(params);
+  const second = context.sendSystemEmail_(params);
+
+  assert.equal(first.sent, true);
+  assert.equal(persisted[0].result, 'PENDING');
+  assert.equal(second.result, 'BLOCKED_DUPLICATE_RESERVATION');
+  assert.equal(context.__state.sentEmails.length, 1);
+});
+
 test('メール送信成功後のSENTログ更新失敗を送信失敗と誤判定しない', () => {
   const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
   context.NotificationsModel.updateById = () => {
@@ -365,6 +467,28 @@ test('月次サマリーは月別冪等キーを持ち、PENDING残留時も同�
   assert.equal(context.__state.notifications[0].result, 'PENDING');
   assert.equal(second.result, 'BLOCKED_DUPLICATE_RESERVATION');
   assert.equal(context.__state.sentEmails.length, 1);
+});
+
+test('月次サマリーは月が変われば別冪等キーで送信できる', () => {
+  const context = createUtilsContext({
+    ENABLE_SEND: 'TRUE',
+    ADMIN_EMAILS: 'admin@example.com'
+  });
+  context.PermitsModel = { getAllActive: () => [] };
+  context.CompaniesModel = { findById: () => null };
+  vm.runInContext(readSource('Mailer.gs'), context, { filename: 'Mailer.gs' });
+  const originalFormatDate = context.Utilities.formatDate;
+
+  const first = context.Mailer.sendMonthlySummary();
+  context.Utilities.formatDate = (date, timezone, format) =>
+    format === 'yyyy-MM' ? '2026-08' : originalFormatDate(date, timezone, format);
+  const second = context.Mailer.sendMonthlySummary();
+
+  assert.equal(first.result, 'SENT');
+  assert.equal(second.result, 'SENT');
+  assert.equal(context.__state.notifications[0].permit_id, 'MONTHLY:2026-07');
+  assert.equal(context.__state.notifications[1].permit_id, 'MONTHLY:2026-08');
+  assert.equal(context.__state.sentEmails.length, 2);
 });
 
 test('permitを持たないERROR_ALERTは繰り返し可能イベントとして重複許可する', () => {
