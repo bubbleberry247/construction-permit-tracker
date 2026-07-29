@@ -285,3 +285,60 @@ cleanupと最終照合:
 
 第2回指摘修正後のfresh-context最終レビュー待ち。
 最終レビューが`APPROVE`になるまで本番反映は`NO-GO`。
+
+## 17. 第3回GR-005レビュー
+
+- 対象: `c4b69a2`
+- 判定: `APPROVE_WITH_CHANGES`
+- 本番反映可否: `CONDITIONAL_GO`
+- Critical: 0件
+- 第2回Warning: 解消を確認
+
+残ったWarning:
+
+- NotificationsのPENDING/SENT/FAILED/BLOCKEDを`SpreadsheetApp.flush()`せず、
+  `ScriptLock`を解放している。
+
+第3回レビュアーの独立テスト:
+
+- Phase 0-B専用テスト: 26件合格
+- 既存Python回帰テスト: 395件合格
+- GAS構文: 17ファイル成功
+- `git diff --check`: 成功
+- Gmail送信箇所: `Utils.gs`の1箇所のみ
+
+## 18. flush修正
+
+- 修正コミット: `09ae67f`
+- PENDING作成直後、Gmail送信前に`SpreadsheetApp.flush()`
+- pre-send flush失敗時はGmail呼び出し0件
+- SENT/FAILED更新後、ロック解放前にflush
+- BLOCKED系も`finally`でロック解放前にflush
+- 送信後flush失敗時も、送信前に確定済みのPENDINGが自動再送を停止
+
+追加テスト:
+
+- PENDING flush失敗時にGmail呼び出し0件
+- PENDING flushがGmail前、結果flushがロック解放前
+- 遅延commit模擬でも確定済みPENDINGが次回送信を停止
+- 月が変われば別の月次冪等キーで送信可能
+
+再テスト:
+
+- Phase 0-B専用テスト: 30件合格
+- 既存Python回帰テスト: 395件合格
+- GAS構文: 17ファイル成功
+- `git diff --check`: 成功
+
+所有者限定テスト環境の再同期:
+
+- Apps Scriptへ19ファイルをpush
+- fresh clone: 19ファイル
+- probeファイル: なし
+- ブランチ`src`との正規化比較: `AllNormalizedEqual=True`
+- 本番Apps Script: 未変更
+
+## 19. 現在の判定
+
+flush修正後のfresh-context最終レビュー待ち。
+最終レビューが`APPROVE`になるまで本番反映は`NO-GO`。

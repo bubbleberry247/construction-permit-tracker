@@ -11,9 +11,12 @@
 - 第2回レビュー対象コミット: `575a93e`
 - 第2回レビュー判定: **APPROVE_WITH_CHANGES / CONDITIONAL_GO**
 - 第2回指摘修正コミット: `0baca3f`
+- 第3回レビュー対象コミット: `c4b69a2`
+- 第3回レビュー判定: **APPROVE_WITH_CHANGES / CONDITIONAL_GO**
+- 第3回指摘修正コミット: `09ae67f`
 - 作成日: 2026-07-30 JST
 - 初回レビュー判定: **REJECT**
-- 現在のレビュー判定: **PENDING（第2回指摘修正後のfresh-context最終レビュー待ち）**
+- 現在のレビュー判定: **PENDING（flush修正後のfresh-context最終レビュー待ち）**
 - 隔離テスト反映: **実施済み**
 - 本番反映: **未実施**
 
@@ -152,6 +155,10 @@ Phase 0中は不要な誤操作面を削るため、Web UIの「今すぐ通知�
 - 月次サマリーへ`MONTHLY:YYYY-MM`の月別冪等キーを付与
 - 月次`PENDING`残留後の同月再実行でもGmail呼び出し0件
 - `ERROR_ALERT`はpermitを持たない繰り返し可能イベントとして明示的に重複許可
+- PENDING作成直後、Gmail送信前に`SpreadsheetApp.flush()`を実行
+- pre-send flush失敗時はGmail呼び出し0件
+- SENT/FAILED/BLOCKEDも`ScriptLock`解放前にflush
+- 送信後flush失敗時も、確定済みPENDINGが自動再送を止める
 
 ## 5. 変更ファイル
 
@@ -184,7 +191,7 @@ npm run test:phase0-p1
 
 結果:
 
-- 26件合格
+- 30件合格
 - 実メール送信なし
 
 主な検証:
@@ -197,11 +204,15 @@ npm run test:phase0-p1
 - Gmail実残量不足・取得失敗時の送信停止
 - エラー通知も共通ゲートを迂回しない
 - PENDING記録失敗時に送信しない
+- PENDING flush失敗時にGmailを呼ばない
+- PENDING flushがGmail前、結果flushがロック解放前
+- 遅延commit模擬でも確定済みPENDINGが次回送信を止める
 - Gmail送信例外をFAILEDへ更新
 - 送信成功後のログ更新失敗を送信失敗と誤判定しない
 - 送信成功後に`PENDING`が残っても次回Gmail呼び出し0件
 - ロック待機中の`ENABLE_SEND TRUE→FALSE`でGmail呼び出し0件
 - 月次`PENDING`残留時の同月再実行でGmail呼び出し0件
+- 月が変われば別の月次冪等キーで送信可能
 - `ERROR_ALERT`はpermitを持たない繰り返し可能イベントとして重複許可
 - `FAILED`は再試行可能
 - 上限確認から結果更新まで共通`ScriptLock`を保持
@@ -272,6 +283,11 @@ python -X utf8 -m pytest -q
   - fresh cloneは19ファイル
   - `ProbeExists=False`
   - ブランチ`src`との正規化比較`AllNormalizedEqual=True`
+- flush修正後の再同期:
+  - 所有者限定テスト用Apps Scriptへ19ファイルをpush
+  - fresh cloneは19ファイル
+  - `ProbeExists=False`
+  - ブランチ`src`との正規化比較`AllNormalizedEqual=True`
 
 詳細証跡は`docs/phase0_p1_test_execution_record_20260730.md`を参照してください。
 
@@ -322,7 +338,30 @@ Criticalは0件で、初回CriticalとWarningの解消は承認されました�
 Suggestionへの対応として、公開入口だけでなく休眠中の`sendManualNotification_`実装も
 削除しました。修正コミットは`0baca3f`です。
 
-## 9. PENDING照合運用
+## 9. 第3回GR-005レビューとflush修正
+
+第3回fresh-contextレビューはコミット`c4b69a2`を
+`APPROVE_WITH_CHANGES / CONDITIONAL_GO`と判定しました。
+
+Criticalは0件でした。第2回Warning 2件の解消は承認されました。
+
+残ったWarningは、NotificationsのPENDING/SENT/FAILED/BLOCKEDを
+`SpreadsheetApp.flush()`せずに`ScriptLock`を解放していた点です。Spreadsheet Serviceの
+保留変更が次実行から見えない場合、重複判定をすり抜ける可能性がありました。
+
+対応:
+
+1. PENDING作成直後、Gmail送信前にflushする。
+2. pre-send flush失敗時は`BLOCKED_LOG_FAILURE`としてGmailを呼ばない。
+3. SENT/FAILED更新後、ロック解放前にflushする。
+4. BLOCKED系も`finally`でロック解放前にflushする。
+5. 送信後flushが失敗しても、送信前に永続化したPENDINGを残して自動再送を止める。
+6. flush順序、flush失敗、遅延commitのテストを追加する。
+7. 月次キーの翌月切替テストを追加する。
+
+修正コミットは`09ae67f`です。
+
+## 10. PENDING照合運用
 
 `PENDING`は「Gmail送信結果が不確実」の意味であり、自動再送しません。
 
@@ -345,7 +384,7 @@ Suggestionへの対応として、公開入口だけでなく休眠中の`sendMa
 
 Phase 0ではこの照合を自動化せず、誤再送を避けるため人の確認を残します。
 
-## 10. Configセルをプレーンテキスト化する非破壊手順
+## 11. Configセルをプレーンテキスト化する非破壊手順
 
 本番ではGR-005承認後にのみ実施します。
 
@@ -359,16 +398,16 @@ Phase 0ではこの照合を自動化せず、誤再送を避けるため人の�
 
 行全体・列全体への表示形式変更、`clearContents()`、Config再生成は行いません。
 
-## 11. 本番反映前に未確認の事項
+## 12. 本番反映前に未確認の事項
 
 以下が残っているため、現時点ではGR-005をAPPROVEにしません。
 
-1. 第2回指摘修正後のfresh-context最終レビュー
+1. flush修正後のfresh-context最終レビュー
 2. 最終レビュー指摘がある場合の修正と再テスト
 3. 本番反映直前のConfig、Gmail送信済み、トリガー0件、バックアップ再確認
 4. 本番反映後も`ENABLE_SEND=FALSE`・Webアプリ`MYSELF`を維持したまま行う最終確認
 
-## 12. 隔離テスト手順と実績
+## 13. 隔離テスト手順と実績
 
 1. ImmutableなPhase 0-Aバックアップとは別に、テスト専用Spreadsheetコピーを作る。**完了**
 2. コピーの共有範囲を所有者だけにする。**完了**
@@ -386,9 +425,12 @@ Phase 0ではこの照合を自動化せず、誤再送を避けるため人の�
 14. 指摘修正後の第2回独立レビュー。**APPROVE_WITH_CHANGES**
 15. 第2回指摘修正、26件の専用テスト、395件の回帰テスト。**完了**
 16. 更新版を所有者限定テスト用Apps Scriptへ同期しfresh clone照合。**完了**
-17. 第2回指摘修正後のfresh-context最終レビュー。**未実施**
+17. 第2回指摘修正後の第3回独立レビュー。**APPROVE_WITH_CHANGES**
+18. flush修正、30件の専用テスト、395件の回帰テスト。**完了**
+19. flush更新版を所有者限定テスト用Apps Scriptへ同期しfresh clone照合。**完了**
+20. flush修正後のfresh-context最終レビュー。**未実施**
 
-## 13. GR-005最終判定欄
+## 14. GR-005最終判定欄
 
 レビュアーは以下を1つ選択します。
 
@@ -407,7 +449,7 @@ Phase 0ではこの照合を自動化せず、誤再送を避けるため人の�
 - Suggestion:
 - 本番反映可否:
 
-## 14. 本番ロールバック
+## 15. 本番ロールバック
 
 ロールバック条件:
 
@@ -426,7 +468,7 @@ Phase 0ではこの照合を自動化せず、誤再送を避けるため人の�
 5. Gmail送信済み、Notifications、AuditLogを照合
 6. 必要な場合のみPhase 0-Aバックアップから復元
 
-## 15. 公式仕様参照
+## 16. 公式仕様参照
 
 - Apps Script private functions:
   - https://developers.google.com/apps-script/guides/html/communication#private_functions
