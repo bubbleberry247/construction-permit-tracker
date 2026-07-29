@@ -161,4 +161,72 @@ cleanup:
 
 隔離実動テストは合格。
 
-ただし、GR-005の独立レビューは未実施であるため、本番反映は`NO-GO`のまま。
+初回GR-005レビューは`REJECT`だったため、指摘修正と再テストを実施した。
+指摘修正後の独立再レビューが未完了のため、本番反映は`NO-GO`のまま。
+
+## 11. GR-005初回指摘の修正と再テスト
+
+- 初回レビュー対象: `ca68e9d29fddb1608005efbfa428a6c8dd3957d8`
+- 初回判定: `REJECT`
+- 指摘修正コミット: `44ef025`
+- 本番反映: 未実施
+
+修正:
+
+- `PENDING`と`SENT`を同一permit・stageの予約済みとして扱う
+- `FAILED`だけを自動再試行可能とする
+- 送信ゲート内で重複を再確認
+- Config上限確認からGmail送信、結果更新まで共通`ScriptLock`を保持
+- Schedulerの外側ロックを`DocumentLock`へ分離
+- `script.send_mail` OAuth scopeを追加
+- `GMAIL_DAILY_LIMIT`を必須Configへ追加
+- Phase 0中のWeb手動通知ボタンと公開APIを一時除去
+
+ローカル再テスト:
+
+- Phase 0-B専用テスト: 23件合格
+- 既存Python回帰テスト: 395件合格
+- GAS構文: 17ファイル成功
+- `git diff --check`: 成功
+
+追加した重要テスト:
+
+- Gmail送信成功後に`SENT`更新が失敗し`PENDING`が残るケース
+- 上記の次回実行でGmail呼び出し0件
+- `FAILED`は再試行可能
+- 共通`ScriptLock`を上限確認から結果更新まで保持
+- 競合実行でGmail呼び出し1件
+
+## 12. `script.send_mail`隔離quota probe
+
+実行先は既存の所有者限定テスト用Apps Scriptのみ。本番にはpushしていない。
+
+一時関数`phase0QuotaScopeProbe`は、次だけを実行した。
+
+1. `ENABLE_SEND=FALSE`を確認
+2. `MailApp.getRemainingDailyQuota()`を呼び出す
+3. 結果をconsoleへ記録
+
+送信APIは呼び出していない。
+
+実行ログ:
+
+```text
+{"enableSend":false,"remainingDailyRecipientQuota":100,"sent":false}
+実行完了
+```
+
+cleanupと最終照合:
+
+- 一時`Phase0QuotaProbe`をテスト用Apps Scriptから除去
+- fresh clone: 19ファイル
+- `ProbeExists=False`
+- ブランチ`src`との正規化比較: `AllNormalizedEqual=True`
+- Webアプリ: `MYSELF`
+- 最終トリガー: 0件
+- 本番Apps Script: 未変更
+
+## 13. 現在の判定
+
+修正と隔離再テストは合格。指摘修正後のfresh-context独立再レビュー待ち。
+再レビューが`APPROVE`になるまで本番反映は`NO-GO`。

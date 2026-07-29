@@ -6,8 +6,11 @@
 - 対象フェーズ: Phase 0-B / P1（誤送信・外部通知起動防止）
 - 作業ブランチ: `codex/phase0-p1-safety`
 - ベースコミット: `73d8828d2ea70eb18c63692bc8bfef53a5201688`
+- 初回レビュー対象コミット: `ca68e9d29fddb1608005efbfa428a6c8dd3957d8`
+- 指摘修正コミット: `44ef025`
 - 作成日: 2026-07-30 JST
-- 現在のレビュー判定: **PENDING（独立レビュアー未判定）**
+- 初回レビュー判定: **REJECT**
+- 現在のレビュー判定: **PENDING（指摘修正後のfresh-context再レビュー待ち）**
 - 隔離テスト反映: **実施済み**
 - 本番反映: **未実施**
 
@@ -77,14 +80,24 @@ Spreadsheetカスタムメニューから`runNow_`を実行できること、お
 
 全 `GmailApp.sendEmail` を `Utils.gs` の `sendSystemEmail_` 1箇所へ集約しました。
 
-送信条件:
+送信条件と処理境界:
 
 1. `ENABLE_SEND`をtrim・大文字化した結果が厳密に `TRUE`
 2. Toが設定済み
-3. `GMAIL_DAILY_LIMIT`が1以上の整数
-4. 当日の`PENDING`＋`SENT`が設定上限未満
-5. `MailApp.getRemainingDailyQuota()`が全受信者数以上
-6. 送信前の`PENDING`記録に成功
+3. 共通`ScriptLock`を取得
+4. `GMAIL_DAILY_LIMIT`が1以上の整数
+5. 同一permit・stageの`PENDING`または`SENT`が存在しない
+6. 当日の`PENDING`＋`SENT`が設定上限未満
+7. `MailApp.getRemainingDailyQuota()`が全受信者数以上
+8. 送信前の`PENDING`記録に成功
+9. Gmail送信とNotifications結果更新を完了
+
+手順3〜9は同じ`ScriptLock`保持中に直列実行します。Schedulerのバッチ多重実行防止は
+`DocumentLock`へ分離し、送信ゲート内の`ScriptLock`と自己デッドロックしない構成です。
+
+重複判定では`PENDING`と`SENT`を予約済みとして扱い、`FAILED`だけを再試行可能とします。
+Gmail送信成功後に`SENT`更新が失敗して`PENDING`が残っても、次回処理では同じ
+permit・stageを自動再送しません。`PENDING`はGmail送信済みとの手動照合対象です。
 
 いずれかを満たさない場合は送信せず、`BLOCKED_*`をNotificationsまたは実行ログへ残します。
 
@@ -93,9 +106,12 @@ Spreadsheetカスタムメニューから`runNow_`を実行できること、お
 - 期限通知
 - 受領確認通知
 - 月次サマリー
-- 手動通知
 - テストメール
 - 内部エラー通知
+
+Phase 0中は不要な誤操作面を削るため、Web UIの「今すぐ通知送信」と
+公開`apiSendNotification`入口を一時的に除去しました。内部の手動通知ロジックを将来
+再有効化する場合も、共通送信ゲートを通る設計です。
 
 送信後のNotifications更新だけが失敗した場合、メール送信自体を失敗扱いにしません。これにより、再実行による二重送信判断を防ぎます。
 
@@ -119,20 +135,24 @@ Spreadsheetカスタムメニューから`runNow_`を実行できること、お
 ### P1-5: Gmail実クォータ
 
 - Config上限だけでなく `MailApp.getRemainingDailyQuota()` を送信直前に確認
+- 明示的なOAuth scopeへ`https://www.googleapis.com/auth/script.send_mail`を追加
 - Gmail実残量は受信者数ベースで評価
 - To/CC/BCCの重複を除いた一意受信者数を必要量として計算
 - 送信ループ途中でも`PENDING`＋`SENT`が設定上限へ達した時点で停止
+- `GMAIL_DAILY_LIMIT`を`checkConfig()`の必須キーへ追加
 
 ## 5. 変更ファイル
 
 - `package.json`
 - `src/CompanyViewModel.gs`
+- `src/Config.gs`
 - `src/FormHandler.gs`
 - `src/Mailer.gs`
 - `src/Models.gs`
 - `src/Scheduler.gs`
 - `src/Ui.gs`
 - `src/Utils.gs`
+- `src/api.gs`
 - `src/appsscript.json`
 - `src/index.html`
 - `src/logic.gs`
@@ -152,7 +172,7 @@ npm run test:phase0-p1
 
 結果:
 
-- 18件合格
+- 23件合格
 - 実メール送信なし
 
 主な検証:
@@ -167,12 +187,19 @@ npm run test:phase0-p1
 - PENDING記録失敗時に送信しない
 - Gmail送信例外をFAILEDへ更新
 - 送信成功後のログ更新失敗を送信失敗と誤判定しない
+- 送信成功後に`PENDING`が残っても次回Gmail呼び出し0件
+- `FAILED`は再試行可能
+- 上限確認から結果更新まで共通`ScriptLock`を保持
+- 競合実行時のGmail呼び出しが1件だけ
 - 日次上限到達後の次送信を停止
 - 不正通知日数時にPermit処理を開始しない
 - `GmailApp.sendEmail`が共通ゲート1箇所だけ
 - 危険な通知入口が公開トップレベル関数として残っていない
+- Webの手動通知ボタンと公開APIが存在しない
 - Phase 0中の危険メニューが非表示
-- 手動通知UIが`sent=false`を成功表示しない
+- Scheduler外側ロックと送信ゲートのロック種別が分離
+- `script.send_mail` scopeがマニフェストに存在
+- `GMAIL_DAILY_LIMIT`が必須設定
 - Webアプリ公開範囲が`MYSELF`から戻らない
 
 ### 既存回帰テスト
@@ -213,10 +240,47 @@ python -X utf8 -m pytest -q
   - ステータス: 完了
 - cleanup: 対象トリガー1件削除、最終トリガー0件
 - 一時`Phase0Probe`ファイル: 除去済み
+- `script.send_mail`隔離quota probe:
+  - `enableSend=false`
+  - `remainingDailyRecipientQuota=100`
+  - `sent=false`
+  - 実行完了
+- quota probe cleanup:
+  - 一時`Phase0QuotaProbe`ファイルを除去
+  - fresh cloneは19ファイル
+  - `ProbeExists=False`
+  - ブランチ`src`との正規化比較`AllNormalizedEqual=True`
+  - 最終トリガー0件
 
 詳細証跡は`docs/phase0_p1_test_execution_record_20260730.md`を参照してください。
 
-## 7. Configセルをプレーンテキスト化する非破壊手順
+## 7. 初回GR-005レビューと修正
+
+初回fresh-contextレビューはコミット`ca68e9d`を`REJECT`、本番`NO-GO`と判定しました。
+
+指摘と対応:
+
+1. Critical: Gmail送信成功後の`SENT`更新失敗で`PENDING`が残り、Schedulerの
+   `hasBeenSent()`が`SENT`だけを見るため二重送信し得る。
+   - 対応: `PENDING`と`SENT`を予約済みとして扱う
+   - 中央送信ゲートでもpermit・stage重複を再確認
+   - 専用の再送防止テストを追加
+2. Warning: Config上限確認、quota確認、PENDING作成、送信が共通排他下にない。
+   - 対応: 全送信経路を共通`ScriptLock`で直列化
+   - Scheduler外側を`DocumentLock`へ変更
+   - 競合実行テストを追加
+3. Warning: `MailApp.getRemainingDailyQuota()`に必要な`script.send_mail` scopeがない。
+   - 対応: マニフェストへscopeを追加
+   - テスト環境で無送信quota probeを実行
+4. Suggestion: `GMAIL_DAILY_LIMIT`が`checkConfig()`の必須キーにない。
+   - 対応: 必須キーへ追加
+5. Suggestion: Phase 0中にもWeb手動通知入口が残る。
+   - 対応: ボタンと公開APIを一時除去
+
+修正コミットは`44ef025`です。修正後のfresh-context再レビューが完了するまで
+本番判定は`NO-GO`を維持します。
+
+## 8. Configセルをプレーンテキスト化する非破壊手順
 
 本番ではGR-005承認後にのみ実施します。
 
@@ -230,16 +294,16 @@ python -X utf8 -m pytest -q
 
 行全体・列全体への表示形式変更、`clearContents()`、Config再生成は行いません。
 
-## 8. 本番反映前に未確認の事項
+## 9. 本番反映前に未確認の事項
 
 以下が残っているため、現時点ではGR-005をAPPROVEにしません。
 
-1. fresh contextの独立レビュアーによる差分・証跡レビュー
-2. レビュー指摘がある場合の修正と再テスト
+1. 指摘修正後のfresh-context独立再レビュー
+2. 再レビュー指摘がある場合の修正と再テスト
 3. 本番反映直前のConfig、Gmail送信済み、トリガー0件、バックアップ再確認
 4. 本番反映後も`ENABLE_SEND=FALSE`・Webアプリ`MYSELF`を維持したまま行う最終確認
 
-## 9. 隔離テスト手順と実績
+## 10. 隔離テスト手順と実績
 
 1. ImmutableなPhase 0-Aバックアップとは別に、テスト専用Spreadsheetコピーを作る。**完了**
 2. コピーの共有範囲を所有者だけにする。**完了**
@@ -252,9 +316,11 @@ python -X utf8 -m pytest -q
 9. テスト専用の一時関数から、`runDailyNotifications_`を指す短時間トリガーを作成する。**完了**
 10. トリガー実行記録を確認後、トリガーと一時関数を削除する。**完了**
 11. テスト用プロジェクトのソースがこのブランチ差分と一致することを再確認する。**完了**
-12. 独立レビュアーがAPPROVEまたはREJECTを記録する。**未実施**
+12. 初回独立レビュー。**REJECT**
+13. 指摘修正、23件の専用テスト、395件の回帰テスト、quota probe。**完了**
+14. 指摘修正後の独立再レビュー。**未実施**
 
-## 10. GR-005判定欄
+## 11. GR-005再判定欄
 
 レビュアーは以下を1つ選択します。
 
@@ -273,7 +339,7 @@ python -X utf8 -m pytest -q
 - Suggestion:
 - 本番反映可否:
 
-## 11. 本番ロールバック
+## 12. 本番ロールバック
 
 ロールバック条件:
 
@@ -292,7 +358,7 @@ python -X utf8 -m pytest -q
 5. Gmail送信済み、Notifications、AuditLogを照合
 6. 必要な場合のみPhase 0-Aバックアップから復元
 
-## 12. 公式仕様参照
+## 13. 公式仕様参照
 
 - Apps Script private functions:
   - https://developers.google.com/apps-script/guides/html/communication#private_functions
