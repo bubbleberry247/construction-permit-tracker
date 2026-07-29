@@ -230,3 +230,58 @@ cleanupと最終照合:
 
 修正と隔離再テストは合格。指摘修正後のfresh-context独立再レビュー待ち。
 再レビューが`APPROVE`になるまで本番反映は`NO-GO`。
+
+## 14. 第2回GR-005レビュー
+
+- 対象: `575a93e`
+- 判定: `APPROVE_WITH_CHANGES`
+- 本番反映可否: `CONDITIONAL_GO`
+- Critical: 0件
+- 初回Critical/Warning: 解消を確認
+
+追加Warning:
+
+1. 送信ロック取得後の`ENABLE_SEND`再確認がConfigキャッシュを再利用する。
+2. permit IDが空の月次サマリーは`PENDING`残留時の重複防止対象外。
+
+第2回レビュアーの独立テスト:
+
+- Phase 0-B専用テスト: 23件合格
+- 既存Python回帰テスト: 395件合格
+- GAS構文: 17ファイル成功
+- `git diff --check`: 成功
+- Gmail送信箇所: `Utils.gs`の1箇所のみ
+
+## 15. 第2回指摘の修正
+
+- 修正コミット: `0baca3f`
+- `reloadConfigAll_()`で送信ロック取得後にConfigを強制再読込
+- `ENABLE_SEND`と`GMAIL_DAILY_LIMIT`を同じfresh snapshotから判定
+- 月次サマリーへ`MONTHLY:YYYY-MM`の月別冪等キーを付与
+- 休眠中の`sendManualNotification_`実装を削除
+
+追加テスト:
+
+- 実際の`Config.gs`を読み込み、ロック待機中の`TRUE→FALSE`でGmail呼び出し0件
+- 月次`PENDING`残留後の同月再実行でGmail呼び出し0件
+- `ERROR_ALERT`は繰り返し可能イベントとして2回送信可能
+
+再テスト:
+
+- Phase 0-B専用テスト: 26件合格
+- 既存Python回帰テスト: 395件合格
+- GAS構文: 17ファイル成功
+- `git diff --check`: 成功
+
+所有者限定テスト環境の再同期:
+
+- Apps Scriptへ19ファイルをpush
+- fresh clone: 19ファイル
+- probeファイル: なし
+- ブランチ`src`との正規化比較: `AllNormalizedEqual=True`
+- 本番Apps Script: 未変更
+
+## 16. 現在の判定
+
+第2回指摘修正後のfresh-context最終レビュー待ち。
+最終レビューが`APPROVE`になるまで本番反映は`NO-GO`。
