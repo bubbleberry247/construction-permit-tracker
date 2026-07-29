@@ -12,7 +12,7 @@ function onFormSubmit(e) {
     lock.waitLock(30000);
   } catch (lockErr) {
     logError('onFormSubmit ロック取得失敗（同時実行制御）', lockErr);
-    sendErrorAlert('フォーム処理ロック取得失敗', 'フォーム送信の同時処理でロック取得に失敗しました。手動確認が必要です。');
+    sendErrorAlert_('フォーム処理ロック取得失敗', 'フォーム送信の同時処理でロック取得に失敗しました。手動確認が必要です。');
     return;
   }
   try {
@@ -217,7 +217,7 @@ function onFormSubmit(e) {
         error_message: 'PDF保存失敗: 手動確認が必要です'
       });
 
-      sendErrorAlert(
+      sendErrorAlert_(
         'PDF保存失敗 (' + companyNameRaw + ')',
         '会社名: ' + companyNameRaw + '\n' +
         '許可番号: ' + permitNumberRaw + '\n' +
@@ -281,7 +281,7 @@ function onFormSubmit(e) {
     });
 
     // ADMIN_EMAILS にエラー通知
-    sendErrorAlert(
+    sendErrorAlert_(
       'フォーム送信処理エラー (' + companyNameRaw + ')',
       '会社名: ' + companyNameRaw + '\n' +
       '許可番号: ' + permitNumberRaw + '\n' +

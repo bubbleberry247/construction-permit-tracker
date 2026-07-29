@@ -918,7 +918,19 @@ function renderDetail(data) {
 // ===== Actions =====
 function deactivateCompany(cid) { if (!confirm('この会社を無効化しますか？')) return; callApi('apiDeactivateCompany', [cid]).then(function() { showToast('無効化しました'); showDetail(cid); }).catch(function(e) { showToast(e.message, 'error'); }); }
 function reactivateCompany(cid) { callApi('apiReactivateCompany', [cid]).then(function() { showToast('再有効化しました'); showDetail(cid); }).catch(function(e) { showToast(e.message, 'error'); }); }
-function sendNotification(cid) { if (!confirm('通知メールを送信しますか？')) return; callApi('apiSendNotification', [cid, null]).then(function(r) { if (r.dryRun) showToast('ドライラン: ' + r.message, 'error'); else showToast('送信完了: ' + r.sentTo); showDetail(cid); }).catch(function(e) { showToast(e.message, 'error'); }); }
+function sendNotification(cid) {
+  if (!confirm('通知メールを送信しますか？')) return;
+  callApi('apiSendNotification', [cid, null]).then(function(r) {
+    if (r && r.sent) {
+      showToast('送信完了: ' + r.sentTo);
+    } else {
+      showToast('送信されませんでした: ' + ((r && (r.message || r.result)) || '不明な理由'), 'error');
+    }
+    showDetail(cid);
+  }).catch(function(e) {
+    showToast(e.message, 'error');
+  });
+}
 function submitAddCompany() {
   var n = document.getElementById('add-name').value.trim(), e = document.getElementById('add-email').value.trim(), c = document.getElementById('add-contact').value.trim();
   if (!n) { showToast('会社名を入力してください', 'error'); return; }

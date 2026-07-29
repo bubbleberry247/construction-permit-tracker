@@ -5,24 +5,6 @@
 var Mailer = {
 
   /**
-   * Gmail 送信上限チェック（Config の GMAIL_DAILY_LIMIT で制御、デフォルト150）
-   * @return {boolean}  true = 送信可能
-   */
-  _checkDailyLimit: function() {
-    var limit = parseInt(getConfig('GMAIL_DAILY_LIMIT') || '150', 10);
-    if (isNaN(limit) || limit <= 0) limit = 150;
-    var sent = NotificationsModel.countSentToday();
-    if (sent >= limit) {
-      sendErrorAlert(
-        'Gmail日次送信上限に達しました',
-        '本日の送信件数が' + limit + '件を超えました。残りの通知はスキップされます。'
-      );
-      return false;
-    }
-    return true;
-  },
-
-  /**
    * ステージ別の通知文言を返す
    * @param {string} stage
    * @return {string}
@@ -44,7 +26,6 @@ var Mailer = {
    * @param {string} stage
    */
   sendExpiryNotification: function(permit, company, stage) {
-    var enableSend = getConfig('ENABLE_SEND');
     var adminEmails = getConfig('ADMIN_EMAILS');
     var formId = getConfig('FORM_ID');
 
@@ -104,39 +85,17 @@ var Mailer = {
       error_message: ''
     };
 
-    // ENABLE_SEND='false' の場合はドライラン
-    if (enableSend === 'false') {
-      notificationData.result = 'DRY_RUN';
-      NotificationsModel.create(notificationData);
-      return;
-    }
+    var mailOptions = {};
+    if (ccList.length > 0) mailOptions.cc = ccList.join(',');
+    if (bccList.length > 0) mailOptions.bcc = bccList.join(',');
 
-    // 送信上限チェック
-    if (!this._checkDailyLimit()) {
-      notificationData.result = 'SKIPPED_LIMIT';
-      NotificationsModel.create(notificationData);
-      return;
-    }
-
-    // 冪等性確保: 先に PENDING でログ記録し、送信後に結果を更新する
-    notificationData.result = 'PENDING';
-    var created = NotificationsModel.create(notificationData);
-    var notificationId = created.notification_id;
-
-    try {
-      var mailOptions = { subject: subject };
-      if (ccList.length > 0) mailOptions.cc = ccList.join(',');
-      if (bccList.length > 0) mailOptions.bcc = bccList.join(',');
-
-      GmailApp.sendEmail(company.contact_email, subject, body, mailOptions);
-      NotificationsModel.updateById(notificationId, { result: 'SENT' });
-    } catch (err) {
-      NotificationsModel.updateById(notificationId, {
-        result: 'FAILED',
-        error_message: err.message || String(err)
-      });
-      logError('sendExpiryNotification 送信エラー', err);
-    }
+    return sendSystemEmail_({
+      to: company.contact_email,
+      subject: subject,
+      body: body,
+      options: mailOptions,
+      notification: notificationData
+    });
   },
 
   /**
@@ -145,7 +104,6 @@ var Mailer = {
    * @param {Object} company
    */
   sendReceiptConfirmation: function(permit, company) {
-    var enableSend = getConfig('ENABLE_SEND');
     var adminEmails = getConfig('ADMIN_EMAILS');
 
     var expiryDateStr = formatDate(
@@ -156,10 +114,21 @@ var Mailer = {
     var subject = '【受領確認】建設業許可証を受領しました（' + (company.company_name_normalized || company.company_name_raw) + '）';
 
     // 次回通知予定ステージを算出
-    var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '90,60,30';
-    var stageDays = stagesStr.split(',').map(function(s) { return parseInt(s.trim(), 10); })
-                             .filter(function(n) { return !isNaN(n); })
-                             .sort(function(a, b) { return b - a; });
+    var stageDays;
+    try {
+      stageDays = parseNotifyStages_(getConfig('NOTIFY_STAGES_DAYS'));
+    } catch (stageErr) {
+      logError('受領確認メール停止: NOTIFY_STAGES_DAYS不正', stageErr);
+      return recordBlockedNotification_({
+        company_id: company.company_id,
+        permit_id: permit.permit_id,
+        to_email: company.contact_email,
+        cc_email: '',
+        stage: 'RECEIPT',
+        subject: subject,
+        body: ''
+      }, 'BLOCKED_INVALID_STAGES', stageErr.message || String(stageErr));
+    }
     var days = daysUntil(permit.expiry_date);
     var nextStage = '（算出不可）';
     for (var i = 0; i < stageDays.length; i++) {
@@ -195,30 +164,16 @@ var Mailer = {
       error_message: ''
     };
 
-    if (enableSend === 'false') {
-      notificationData.result = 'DRY_RUN';
-      NotificationsModel.create(notificationData);
-      return;
-    }
+    var mailOptions = {};
+    if (adminEmails) mailOptions.bcc = adminEmails;
 
-    // 冪等性確保: 先に PENDING でログ記録し、送信後に結果を更新する
-    notificationData.result = 'PENDING';
-    var created = NotificationsModel.create(notificationData);
-    var notificationId = created.notification_id;
-
-    try {
-      var mailOptions = { subject: subject };
-      if (adminEmails) mailOptions.bcc = adminEmails;
-
-      GmailApp.sendEmail(company.contact_email, subject, body, mailOptions);
-      NotificationsModel.updateById(notificationId, { result: 'SENT' });
-    } catch (err) {
-      NotificationsModel.updateById(notificationId, {
-        result: 'FAILED',
-        error_message: err.message || String(err)
-      });
-      logError('sendReceiptConfirmation 送信エラー', err);
-    }
+    return sendSystemEmail_({
+      to: company.contact_email,
+      subject: subject,
+      body: body,
+      options: mailOptions,
+      notification: notificationData
+    });
   },
 
   /**
@@ -232,13 +187,21 @@ var Mailer = {
       '送信日時: ' + formatDate(new Date(), 'yyyy/MM/dd HH:mm:ss') + '\n\n' +
       '正常に受信できていれば、メール送信設定は正しく動作しています。';
 
-    try {
-      GmailApp.sendEmail(toEmail, subject, body);
-      SpreadsheetApp.getUi().alert('テストメールを送信しました。\n宛先: ' + toEmail);
-    } catch (err) {
-      logError('sendTestEmail エラー', err);
-      SpreadsheetApp.getUi().alert('送信に失敗しました。\n' + err.message);
-    }
+    return sendSystemEmail_({
+      to: toEmail,
+      subject: subject,
+      body: body,
+      options: {},
+      notification: {
+        company_id: '',
+        permit_id: '',
+        to_email: toEmail,
+        cc_email: '',
+        stage: 'TEST',
+        subject: subject,
+        body: body
+      }
+    });
   },
 
   /**
@@ -246,7 +209,6 @@ var Mailer = {
    */
   sendMonthlySummary: function() {
     var adminEmails = getConfig('ADMIN_EMAILS');
-    var enableSend = getConfig('ENABLE_SEND');
     if (!adminEmails) return;
 
     var permits = PermitsModel.getAllActive();
@@ -286,15 +248,25 @@ var Mailer = {
 
     body += '\n\n■ ご対応のお願い\n更新が完了した業者様には、新しい許可証PDFをGoogleフォーム経由でご提出いただくようご案内ください。';
 
-    if (enableSend === 'false') return;
+    var recipients = normalizeEmailRecipients_(adminEmails);
+    if (recipients.length === 0) return;
+    var mailOptions = {};
+    if (recipients.length > 1) mailOptions.cc = recipients.slice(1).join(',');
 
-    var recipients = adminEmails.split(',').map(function(e) { return e.trim(); }).filter(Boolean);
-    try {
-      GmailApp.sendEmail(recipients[0], subject, body, {
-        cc: recipients.slice(1).join(',') || undefined
-      });
-    } catch (err) {
-      logError('sendMonthlySummary 送信エラー', err);
-    }
+    return sendSystemEmail_({
+      to: recipients[0],
+      subject: subject,
+      body: body,
+      options: mailOptions,
+      notification: {
+        company_id: '',
+        permit_id: '',
+        to_email: recipients[0],
+        cc_email: mailOptions.cc || '',
+        stage: 'MONTHLY',
+        subject: subject,
+        body: body
+      }
+    });
   }
 };

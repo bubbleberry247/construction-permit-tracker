@@ -583,25 +583,8 @@ function sendManualNotification_(companyId, permitKey, userEmail) {
     'お手続きがまだの場合は、早めのご対応をお願いいたします。\n\n' +
     '何卒よろしくお願いいたします。';
 
-  // Check ENABLE_SEND
-  var enableSend = getConfig('ENABLE_SEND');
-  if (enableSend !== 'true' && enableSend !== 'TRUE') {
-    writeAuditLog_(userEmail, 'NOTIFY_DRYRUN', 'Permit', companyId, 'ENABLE_SEND=false, not sent');
-    return { success: true, dryRun: true, message: 'ENABLE_SEND=falseのため送信されませんでした' };
-  }
-
-  // Send via Gmail
   var adminEmails = getConfig('ADMIN_EMAILS') || '';
-  GmailApp.sendEmail(email, subject, body, {
-    cc: adminEmails,
-    name: '東海インプル建設 許可管理システム'
-  });
-
-  // Record notification
-  var now = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
-  appendRecord_(SHEETS.Notifications, {
-    notification_id: generateUuid(),
-    sent_at: now,
+  var notificationData = {
     company_id: companyId,
     permit_id: permit.permit_number || '',
     to_email: email,
@@ -609,11 +592,57 @@ function sendManualNotification_(companyId, permitKey, userEmail) {
     stage: 'MANUAL',
     subject: subject,
     body: body.substring(0, 500),
-    result: 'SENT',
+    result: '',
     error_message: ''
+  };
+
+  // 通知設定が不正な間は手動通知も含めて全通知を停止する。
+  try {
+    parseNotifyStages_(getConfig('NOTIFY_STAGES_DAYS'));
+  } catch (stageErr) {
+    var blockedResult = recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_INVALID_STAGES',
+      stageErr.message || String(stageErr)
+    );
+    writeAuditLog_(
+      userEmail,
+      'NOTIFY_BLOCKED',
+      'Permit',
+      companyId,
+      'NOTIFY_STAGES_DAYS invalid'
+    );
+    return blockedResult;
+  }
+
+  var mailOptions = {
+    name: '東海インプル建設 許可管理システム'
+  };
+  if (adminEmails) mailOptions.cc = adminEmails;
+
+  var sendResult = sendSystemEmail_({
+    to: email,
+    subject: subject,
+    body: body,
+    options: mailOptions,
+    notification: notificationData
   });
 
-  writeAuditLog_(userEmail, 'NOTIFY_SENT', 'Permit', companyId, 'to=' + email);
+  if (sendResult && sendResult.sent) {
+    sendResult.sentTo = email;
+    writeAuditLog_(userEmail, 'NOTIFY_SENT', 'Permit', companyId, 'to=' + email);
+  } else {
+    if (sendResult && !sendResult.message) {
+      sendResult.message = '安全条件を満たさないため送信されませんでした';
+    }
+    writeAuditLog_(
+      userEmail,
+      'NOTIFY_BLOCKED',
+      'Permit',
+      companyId,
+      (sendResult && sendResult.result) || 'UNKNOWN'
+    );
+  }
 
-  return { success: true, sentTo: email };
+  return sendResult;
 }

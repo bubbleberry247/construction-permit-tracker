@@ -8,26 +8,34 @@
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('許可証管理')
-    .addItem('期限チェックを今すぐ実行', 'runNow')
-    .addSeparator()
-    .addItem('テストメール送信', 'promptAndSendTestEmail')
+    .addItem('期限チェックを今すぐ実行', 'runNow_')
     .addItem('設定チェック', 'checkConfigMenu')
     .addItem('会社ビュー更新', 'refreshCompanyViewMenu')
-    .addSeparator()
-    .addItem('シートヘッダ初期化', 'initSheetHeaders')
-    .addSeparator()
-    .addItem('日次トリガー設定（毎朝8時）', 'setupDailyTrigger')
     .addToUi();
 }
 
 /**
- * メールアドレスを入力してテストメール送信する
+ * 管理者本人が管理者宛にのみテストメールを送る。
+ * Phase 0中はメニューに表示せず、末尾 "_" によりWebクライアントからも非公開。
  */
-function promptAndSendTestEmail() {
+function promptAndSendTestEmail_() {
   var ui = SpreadsheetApp.getUi();
+  var currentEmail = String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
+  var adminEmails = normalizeEmailRecipients_(getConfig('ADMIN_EMAILS')).map(function(email) {
+    return email.toLowerCase();
+  });
+  if (!currentEmail || adminEmails.indexOf(currentEmail) < 0) {
+    ui.alert('テストメール送信は管理者本人だけが実行できます。');
+    return;
+  }
+  if (!isSendEnabled_()) {
+    ui.alert('ENABLE_SENDが明示的なTRUEではないため、テストメールは送信できません。');
+    return;
+  }
+
   var result = ui.prompt(
     'テストメール送信',
-    '送信先メールアドレスを入力してください:',
+    'ADMIN_EMAILSに登録済みの送信先メールアドレスを入力してください:',
     ui.ButtonSet.OK_CANCEL
   );
 
@@ -37,7 +45,27 @@ function promptAndSendTestEmail() {
       ui.alert('メールアドレスが入力されていません。');
       return;
     }
-    Mailer.sendTestEmail(email);
+    if (adminEmails.indexOf(email.toLowerCase()) < 0) {
+      ui.alert('外部宛先へのテスト送信は禁止されています。ADMIN_EMAILS登録先を指定してください。');
+      return;
+    }
+
+    var confirmation = ui.alert(
+      'テストメール送信の最終確認',
+      '宛先: ' + email + '\n実メールを1通送信します。続行しますか？',
+      ui.ButtonSet.YES_NO
+    );
+    if (confirmation !== ui.Button.YES) return;
+
+    var sendResult = Mailer.sendTestEmail(email);
+    if (sendResult && sendResult.sent) {
+      ui.alert('テストメールを送信しました。\n宛先: ' + email);
+    } else {
+      ui.alert(
+        'テストメールは送信されませんでした。\n' +
+          ((sendResult && sendResult.message) || 'Notificationsと実行ログをご確認ください。')
+      );
+    }
   }
 }
 
@@ -73,12 +101,13 @@ function refreshCompanyViewMenu() {
 }
 
 /**
- * runDailyNotifications の time-driven トリガーを設定する（毎朝8時）
+ * runDailyNotifications_ の time-driven トリガーを設定する（毎朝8時）
  * 既存の同名トリガーがある場合は先に削除して重複を防ぐ
+ * Phase 0中はメニューに表示せず、コードレビュー後の管理者手順でのみ使用する。
  */
-function setupDailyTrigger() {
+function setupDailyTrigger_() {
   var ui = SpreadsheetApp.getUi();
-  var FUNCTION_NAME = 'runDailyNotifications';
+  var FUNCTION_NAME = 'runDailyNotifications_';
 
   // 既存トリガーを削除
   var triggers = ScriptApp.getProjectTriggers();

@@ -1,6 +1,6 @@
 /**
  * CompanyViewModel.gs — CompanyView シート自動生成
- * Scheduler.gs の runDailyNotifications() から毎日呼び出す
+ * Scheduler.gs の runDailyNotifications_() から毎日呼び出す
  */
 
 // ステータス優先度（数値が大きいほど深刻）

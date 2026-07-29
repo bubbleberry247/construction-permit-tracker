@@ -416,6 +416,27 @@ var NotificationsModel = {
       }
     });
     return count;
+  },
+
+  /**
+   * 今日の PENDING または SENT 件数を返す。
+   * 送信前予約を上限計算へ含め、並行実行時の過剰送信を抑止する。
+   * @return {number}
+   */
+  countReservedOrSentToday: function() {
+    var sheet = this.getSheet();
+    var rows = sheetToObjects_(sheet);
+    var today = formatDate(new Date(), 'yyyy/MM/dd');
+    var count = 0;
+    rows.forEach(function(r) {
+      var result = String(r.result);
+      if (result === 'PENDING' || result === 'SENT') {
+        var sentAt = r.sent_at;
+        var sentDate = formatDate(sentAt instanceof Date ? sentAt : new Date(sentAt), 'yyyy/MM/dd');
+        if (sentDate === today) count++;
+      }
+    });
+    return count;
   }
 };
 

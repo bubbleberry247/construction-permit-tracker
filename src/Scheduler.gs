@@ -4,29 +4,37 @@
 
 /**
  * time-driven トリガーで毎日実行するメイン関数
+ * 末尾 "_" によりWebクライアントからは呼び出せない。
+ * @return {Object} 実行結果
  */
-function runDailyNotifications() {
+function runDailyNotifications_() {
   var lock = LockService.getScriptLock();
   try {
     lock.waitLock(60000);
   } catch (lockErr) {
-    logError('runDailyNotifications ロック取得失敗（多重実行防止）', lockErr);
-    return;
+    logError('runDailyNotifications_ ロック取得失敗（多重実行防止）', lockErr);
+    return {
+      success: false,
+      processed: 0,
+      errors: 1,
+      message: lockErr.message || String(lockErr)
+    };
   }
   try {
-    // 1. NOTIFY_STAGES_DAYS を配列に変換
-    var stagesStr = getConfig('NOTIFY_STAGES_DAYS') || '90,60,30,0';
-    var stageDays = stagesStr.split(',').map(function(s) {
-      return parseInt(s.trim(), 10);
-    }).filter(function(n) { return !isNaN(n); }).sort(function(a, b) { return b - a; });
+    // 1. NOTIFY_STAGES_DAYS を厳密検証する。不正時は1件も処理しない。
+    var stageDays = parseNotifyStages_(getConfig('NOTIFY_STAGES_DAYS'));
 
     // 2. 全アクティブ permit 取得
     var permits = PermitsModel.getAllActive();
+    var processed = 0;
+    var errors = 0;
 
     permits.forEach(function(permit) {
       try {
         processPermit_(permit, stageDays);
+        processed++;
       } catch (err) {
+        errors++;
         logError('permit処理エラー (permit_id: ' + permit.permit_id + ')', err);
       }
     });
@@ -43,9 +51,25 @@ function runDailyNotifications() {
       Mailer.sendMonthlySummary();
     }
 
+    return {
+      success: true,
+      processed: processed,
+      errors: errors,
+      message: '日次処理が完了しました'
+    };
+
   } catch (err) {
-    logError('runDailyNotifications エラー', err);
-    sendErrorAlert('日次バッチエラー', err.message + '\n' + (err.stack || ''));
+    logError('runDailyNotifications_ エラー', err);
+    // 通知日数設定が不正な場合は、内部エラー通知も含めてメールを1件も送らない。
+    if (err.code !== 'INVALID_NOTIFY_STAGES') {
+      sendErrorAlert_('日次バッチエラー', err.message + '\n' + (err.stack || ''));
+    }
+    return {
+      success: false,
+      processed: 0,
+      errors: 1,
+      message: err.message || String(err)
+    };
   } finally {
     lock.releaseLock();
   }
@@ -143,8 +167,26 @@ function updatePermitStatus_(permit, days) {
 
 /**
  * メニューから手動実行するためのラッパー
+ * Spreadsheet UI専用。末尾 "_" によりWebクライアントからは呼び出せない。
  */
-function runNow() {
-  runDailyNotifications();
-  SpreadsheetApp.getUi().alert('期限チェックを実行しました。Notificationsシートをご確認ください。');
+function runNow_() {
+  var ui = SpreadsheetApp.getUi();
+  var result = runDailyNotifications_();
+  if (result && result.success) {
+    ui.alert(
+      '期限チェック完了',
+      '処理件数: ' + result.processed + '件\n' +
+        '個別エラー: ' + result.errors + '件\n' +
+        'Notificationsシートをご確認ください。',
+      ui.ButtonSet.OK
+    );
+  } else {
+    ui.alert(
+      '期限チェック停止',
+      '安全条件を満たさないため処理を停止しました。\n' +
+        ((result && result.message) || '詳細は実行ログをご確認ください。'),
+      ui.ButtonSet.OK
+    );
+  }
+  return result;
 }

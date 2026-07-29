@@ -55,24 +55,340 @@ function daysUntil(targetDate) {
 }
 
 /**
- * ADMIN_EMAILS に対してエラー通知メールを送信する
- * @param {string} subject
- * @param {string} message
+ * ENABLE_SEND が明示的な TRUE の場合だけ送信を許可する。
+ * 空欄、未設定、不正値、1、FALSE はすべて false。
+ * @return {boolean}
  */
-function sendErrorAlert(subject, message) {
-  var adminEmails = getConfig('ADMIN_EMAILS');
-  if (!adminEmails) {
-    console.error('ADMIN_EMAILS未設定。エラーアラートを送信できません: ' + subject);
-    return;
+function isSendEnabled_() {
+  return String(getConfig('ENABLE_SEND') || '').trim().toUpperCase() === 'TRUE';
+}
+
+/**
+ * NOTIFY_STAGES_DAYS を厳密に検証して降順の数値配列を返す。
+ * 重複値は除去する。空欄・不正形式・0〜365外の値は拒否する。
+ * @param {*} rawValue
+ * @return {number[]}
+ */
+function parseNotifyStages_(rawValue) {
+  var raw = String(rawValue === null || rawValue === undefined ? '' : rawValue).trim();
+  if (!/^\d{1,3}(,\d{1,3})*$/.test(raw)) {
+    var formatError = new Error('NOTIFY_STAGES_DAYSの形式が不正です: ' + raw);
+    formatError.code = 'INVALID_NOTIFY_STAGES';
+    throw formatError;
   }
-  var recipients = adminEmails.split(',').map(function(e) { return e.trim(); }).filter(Boolean);
-  recipients.forEach(function(email) {
-    try {
-      GmailApp.sendEmail(email, '[ERROR] ' + subject, message);
-    } catch (ex) {
-      console.error('エラーアラート送信失敗: ' + ex.message);
+
+  var seen = {};
+  var stages = [];
+  raw.split(',').forEach(function(part) {
+    var value = Number(part);
+    if (!Number.isInteger(value) || value < 0 || value > 365) {
+      var rangeError = new Error('NOTIFY_STAGES_DAYSは0〜365で指定してください: ' + part);
+      rangeError.code = 'INVALID_NOTIFY_STAGES';
+      throw rangeError;
+    }
+    if (!seen[value]) {
+      seen[value] = true;
+      stages.push(value);
     }
   });
+
+  stages.sort(function(a, b) { return b - a; });
+  return stages;
+}
+
+/**
+ * Config上の日次送信上限を厳密に取得する。
+ * 未設定・不正値は安全側に倒して例外とする。
+ * @return {number}
+ */
+function getConfiguredDailySendLimit_() {
+  var raw = String(getConfig('GMAIL_DAILY_LIMIT') || '').trim();
+  if (!/^\d+$/.test(raw)) {
+    throw new Error('GMAIL_DAILY_LIMITが未設定または不正です');
+  }
+  var limit = Number(raw);
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error('GMAIL_DAILY_LIMITは1以上の整数で指定してください');
+  }
+  return limit;
+}
+
+/**
+ * カンマ区切りの宛先を正規化する。
+ * @param {*} value
+ * @return {string[]}
+ */
+function normalizeEmailRecipients_(value) {
+  return String(value || '').split(',').map(function(email) {
+    return email.trim();
+  }).filter(Boolean);
+}
+
+/**
+ * To/CC/BCCを合算した一意な受信者数を返す。
+ * @param {string} to
+ * @param {Object} options
+ * @return {number}
+ */
+function countEmailRecipients_(to, options) {
+  var unique = {};
+  normalizeEmailRecipients_(to).concat(
+    normalizeEmailRecipients_(options && options.cc),
+    normalizeEmailRecipients_(options && options.bcc)
+  ).forEach(function(email) {
+    unique[email.toLowerCase()] = true;
+  });
+  return Object.keys(unique).length;
+}
+
+/**
+ * 送信を行わなかった理由をNotificationsへ記録する。
+ * 記録できない場合も実行ログへ残し、メール送信へ進ませない。
+ * @param {Object} notificationData
+ * @param {string} result
+ * @param {string} message
+ * @return {Object}
+ */
+function recordBlockedNotification_(notificationData, result, message) {
+  notificationData.result = result;
+  notificationData.error_message = message || '';
+  var logFailure = '';
+  try {
+    NotificationsModel.create(notificationData);
+  } catch (logErr) {
+    logFailure = logErr.message || String(logErr);
+    console.error('BLOCKED通知の記録に失敗しました（メールは送信しません）: ' + logFailure);
+  }
+  console.warn(result + ': ' + (message || 'メール送信を停止しました'));
+  return {
+    success: false,
+    sent: false,
+    blocked: true,
+    result: result,
+    message: message || '',
+    logFailure: logFailure
+  };
+}
+
+/**
+ * システム内の全メール送信を通す共通ゲート。
+ * ENABLE_SEND、設定上限、Gmail実残量、intent logを順に確認する。
+ * @param {{
+ *   to: string,
+ *   subject: string,
+ *   body: string,
+ *   options: Object,
+ *   notification: Object
+ * }} params
+ * @return {Object}
+ */
+function sendSystemEmail_(params) {
+  params = params || {};
+  var to = String(params.to || '').trim();
+  var subject = String(params.subject || '');
+  var body = String(params.body || '');
+  var options = params.options || {};
+  var notificationData = params.notification || {};
+
+  notificationData.to_email = notificationData.to_email || to;
+  notificationData.cc_email = notificationData.cc_email || String(options.cc || '');
+  notificationData.subject = notificationData.subject || subject;
+  notificationData.body = notificationData.body || body;
+  notificationData.stage = notificationData.stage || 'SYSTEM';
+  notificationData.result = '';
+  notificationData.error_message = '';
+
+  if (!isSendEnabled_()) {
+    return recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_SEND_DISABLED',
+      'ENABLE_SENDが明示的なTRUEではありません'
+    );
+  }
+
+  var recipientCount = countEmailRecipients_(to, options);
+  if (!to || recipientCount <= 0) {
+    return recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_RECIPIENT',
+      '送信先が未設定です'
+    );
+  }
+
+  var configuredLimit;
+  try {
+    configuredLimit = getConfiguredDailySendLimit_();
+  } catch (configErr) {
+    return recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_CONFIG',
+      configErr.message || String(configErr)
+    );
+  }
+
+  // PENDINGを予約済みとして数え、同一実行ループ中の上限超過を抑止する。
+  var reservedOrSent;
+  try {
+    reservedOrSent = NotificationsModel.countReservedOrSentToday();
+  } catch (countErr) {
+    return recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_LOG_FAILURE',
+      '送信済み件数を確認できません: ' + (countErr.message || String(countErr))
+    );
+  }
+  if (reservedOrSent >= configuredLimit) {
+    return recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_CONFIG_LIMIT',
+      '設定上の日次送信上限に達しました: ' + configuredLimit
+    );
+  }
+
+  var providerRemaining;
+  try {
+    providerRemaining = Number(MailApp.getRemainingDailyQuota());
+  } catch (quotaErr) {
+    return recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_QUOTA_CHECK',
+      'Gmail実残量を確認できません: ' + (quotaErr.message || String(quotaErr))
+    );
+  }
+  if (!Number.isFinite(providerRemaining) || providerRemaining < recipientCount) {
+    return recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_PROVIDER_QUOTA',
+      'Gmail実残量が不足しています: remaining=' + providerRemaining +
+        ', required=' + recipientCount
+    );
+  }
+
+  // 送信前にintentを記録する。記録失敗時は送信しない。
+  notificationData.result = 'PENDING';
+  var created;
+  try {
+    created = NotificationsModel.create(notificationData);
+  } catch (intentErr) {
+    console.error(
+      'PENDING記録に失敗したためメールを送信しません: ' +
+        (intentErr.message || String(intentErr))
+    );
+    return {
+      success: false,
+      sent: false,
+      blocked: true,
+      result: 'BLOCKED_LOG_FAILURE',
+      message: intentErr.message || String(intentErr)
+    };
+  }
+  var notificationId = created.notification_id;
+
+  try {
+    GmailApp.sendEmail(to, subject, body, options);
+  } catch (sendErr) {
+    try {
+      NotificationsModel.updateById(notificationId, {
+        result: 'FAILED',
+        error_message: sendErr.message || String(sendErr)
+      });
+    } catch (failedLogErr) {
+      console.error(
+        '送信失敗後のNotifications更新にも失敗しました: ' +
+          (failedLogErr.message || String(failedLogErr))
+      );
+    }
+    logError('メール送信エラー', sendErr);
+    return {
+      success: false,
+      sent: false,
+      blocked: false,
+      result: 'FAILED',
+      message: sendErr.message || String(sendErr),
+      notificationId: notificationId
+    };
+  }
+
+  // ここへ到達した時点でGmail送信は成功済み。ログ更新失敗と混同しない。
+  var sentLogUpdated = false;
+  var sentLogError = '';
+  try {
+    sentLogUpdated = NotificationsModel.updateById(
+      notificationId,
+      { result: 'SENT', error_message: '' }
+    );
+    if (!sentLogUpdated) {
+      sentLogError = 'notification_idが見つかりません';
+    }
+  } catch (sentLogErr) {
+    sentLogError = sentLogErr.message || String(sentLogErr);
+  }
+  if (!sentLogUpdated) {
+    console.error(
+      'メール送信は成功しましたがNotifications更新に失敗しました: ' +
+        notificationId + ' ' + sentLogError
+    );
+  }
+
+  return {
+    success: true,
+    sent: true,
+    blocked: false,
+    result: 'SENT',
+    notificationId: notificationId,
+    logUpdated: sentLogUpdated,
+    logError: sentLogError
+  };
+}
+
+/**
+ * ADMIN_EMAILS に対して内部エラー通知メールを送信する。
+ * 末尾 "_" の非公開関数とし、クライアント入力から直接起動できない。
+ * @param {string} subject
+ * @param {string} message
+ * @return {Object}
+ */
+function sendErrorAlert_(subject, message) {
+  var recipients = normalizeEmailRecipients_(getConfig('ADMIN_EMAILS'));
+  if (recipients.length === 0) {
+    console.error('ADMIN_EMAILS未設定。エラーアラートを送信できません: ' + subject);
+    return {
+      success: false,
+      sent: false,
+      blocked: true,
+      result: 'BLOCKED_RECIPIENT'
+    };
+  }
+
+  try {
+    return sendSystemEmail_({
+      to: recipients[0],
+      subject: '[ERROR] ' + String(subject || ''),
+      body: String(message || ''),
+      options: recipients.length > 1 ? { bcc: recipients.slice(1).join(',') } : {},
+      notification: {
+        company_id: '',
+        permit_id: '',
+        to_email: recipients[0],
+        cc_email: '',
+        stage: 'ERROR_ALERT',
+        subject: '[ERROR] ' + String(subject || ''),
+        body: String(message || '')
+      }
+    });
+  } catch (alertErr) {
+    console.error(
+      'エラーアラート処理失敗（メールは送信されていない可能性があります）: ' +
+        (alertErr.message || String(alertErr))
+    );
+    return {
+      success: false,
+      sent: false,
+      blocked: true,
+      result: 'BLOCKED_INTERNAL_ERROR',
+      message: alertErr.message || String(alertErr)
+    };
+  }
 }
 
 /**

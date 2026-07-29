@@ -6,7 +6,8 @@
     "push": "clasp push",
     "pull": "clasp pull",
     "deploy": "clasp push && clasp deploy",
-    "open": "clasp open"
+    "open": "clasp open",
+    "test:phase0-p1": "node tests/test_phase0_p1.js"
   },
   "devDependencies": {
     "@google/clasp": "^2.4.2"
