@@ -365,7 +365,11 @@ var NotificationsModel = {
     return data;
   },
 
-  hasBeenSent: function(permitId, stage) {
+  /**
+   * 同一許可・同一ステージに、送信予約(PENDING)または送信済み(SENT)があるか。
+   * PENDINGは送信結果が不確実なため、自動再送せず手動照合対象とする。
+   */
+  hasBeenReservedOrSent: function(permitId, stage) {
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
     for (var i = 0; i < rows.length; i++) {
@@ -373,12 +377,19 @@ var NotificationsModel = {
       if (
         String(rows[i].permit_id) === String(permitId) &&
         String(rows[i].stage) === String(stage) &&
-        result === 'SENT'
+        (result === 'PENDING' || result === 'SENT')
       ) {
         return true;
       }
     }
     return false;
+  },
+
+  /**
+   * 後方互換用。安全側に倒し、PENDINGも送信済み相当として扱う。
+   */
+  hasBeenSent: function(permitId, stage) {
+    return this.hasBeenReservedOrSent(permitId, stage);
   },
 
   /**

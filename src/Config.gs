@@ -47,7 +47,8 @@ function checkConfig() {
     'FORM_ID',
     'NOTIFY_STAGES_DAYS',
     'RUN_TIMEZONE',
-    'ENABLE_SEND'
+    'ENABLE_SEND',
+    'GMAIL_DAILY_LIMIT'
   ];
   var config = loadConfigAll_();
   var missing = [];

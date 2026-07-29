@@ -182,27 +182,6 @@ function apiReactivateCompany(companyId, clientUserKey) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Notification
-// ---------------------------------------------------------------------------
-
-/**
- * 手動通知送信（特定の許可証に対して）
- * @param {string} companyId
- * @param {string} permitKey
- * @param {string} [clientUserKey]
- */
-function apiSendNotification(companyId, permitKey, clientUserKey) {
-  _setUser_(clientUserKey);
-  try {
-    requireAuth_();
-    var result = sendManualNotification_(companyId, permitKey, __currentUserEmail);
-    return toSerializable_(result);
-  } catch (e) {
-    return { _error: true, message: String(e.message || e) };
-  }
-}
-
 /**
  * 通知履歴を返す
  * @param {number} [limit]

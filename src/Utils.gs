@@ -215,130 +215,195 @@ function sendSystemEmail_(params) {
     );
   }
 
-  var configuredLimit;
+  // 全送信経路で同じ ScriptLock を使い、次の一連の処理を直列化する。
+  // 設定上限確認 → Gmail残量確認 → PENDING予約 → 実送信 → 結果更新
+  var sendLock;
+  var sendLockAcquired = false;
   try {
-    configuredLimit = getConfiguredDailySendLimit_();
-  } catch (configErr) {
+    sendLock = LockService.getScriptLock();
+    sendLockAcquired = sendLock.tryLock(30000);
+  } catch (lockErr) {
     return recordBlockedNotification_(
       notificationData,
-      'BLOCKED_CONFIG',
-      configErr.message || String(configErr)
+      'BLOCKED_SEND_LOCK',
+      '送信排他ロックを取得できません: ' + (lockErr.message || String(lockErr))
+    );
+  }
+  if (!sendLockAcquired) {
+    return recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_SEND_LOCK',
+      '送信排他ロックを30秒以内に取得できません'
     );
   }
 
-  // PENDINGを予約済みとして数え、同一実行ループ中の上限超過を抑止する。
-  var reservedOrSent;
   try {
-    reservedOrSent = NotificationsModel.countReservedOrSentToday();
-  } catch (countErr) {
-    return recordBlockedNotification_(
-      notificationData,
-      'BLOCKED_LOG_FAILURE',
-      '送信済み件数を確認できません: ' + (countErr.message || String(countErr))
-    );
-  }
-  if (reservedOrSent >= configuredLimit) {
-    return recordBlockedNotification_(
-      notificationData,
-      'BLOCKED_CONFIG_LIMIT',
-      '設定上の日次送信上限に達しました: ' + configuredLimit
-    );
-  }
-
-  var providerRemaining;
-  try {
-    providerRemaining = Number(MailApp.getRemainingDailyQuota());
-  } catch (quotaErr) {
-    return recordBlockedNotification_(
-      notificationData,
-      'BLOCKED_QUOTA_CHECK',
-      'Gmail実残量を確認できません: ' + (quotaErr.message || String(quotaErr))
-    );
-  }
-  if (!Number.isFinite(providerRemaining) || providerRemaining < recipientCount) {
-    return recordBlockedNotification_(
-      notificationData,
-      'BLOCKED_PROVIDER_QUOTA',
-      'Gmail実残量が不足しています: remaining=' + providerRemaining +
-        ', required=' + recipientCount
-    );
-  }
-
-  // 送信前にintentを記録する。記録失敗時は送信しない。
-  notificationData.result = 'PENDING';
-  var created;
-  try {
-    created = NotificationsModel.create(notificationData);
-  } catch (intentErr) {
-    console.error(
-      'PENDING記録に失敗したためメールを送信しません: ' +
-        (intentErr.message || String(intentErr))
-    );
-    return {
-      success: false,
-      sent: false,
-      blocked: true,
-      result: 'BLOCKED_LOG_FAILURE',
-      message: intentErr.message || String(intentErr)
-    };
-  }
-  var notificationId = created.notification_id;
-
-  try {
-    GmailApp.sendEmail(to, subject, body, options);
-  } catch (sendErr) {
-    try {
-      NotificationsModel.updateById(notificationId, {
-        result: 'FAILED',
-        error_message: sendErr.message || String(sendErr)
-      });
-    } catch (failedLogErr) {
-      console.error(
-        '送信失敗後のNotifications更新にも失敗しました: ' +
-          (failedLogErr.message || String(failedLogErr))
+    // ロック待機中に設定が変更された場合も安全側に倒す。
+    if (!isSendEnabled_()) {
+      return recordBlockedNotification_(
+        notificationData,
+        'BLOCKED_SEND_DISABLED',
+        'ENABLE_SENDが明示的なTRUEではありません'
       );
     }
-    logError('メール送信エラー', sendErr);
-    return {
-      success: false,
-      sent: false,
-      blocked: false,
-      result: 'FAILED',
-      message: sendErr.message || String(sendErr),
-      notificationId: notificationId
-    };
-  }
 
-  // ここへ到達した時点でGmail送信は成功済み。ログ更新失敗と混同しない。
-  var sentLogUpdated = false;
-  var sentLogError = '';
-  try {
-    sentLogUpdated = NotificationsModel.updateById(
-      notificationId,
-      { result: 'SENT', error_message: '' }
-    );
-    if (!sentLogUpdated) {
-      sentLogError = 'notification_idが見つかりません';
+    var configuredLimit;
+    try {
+      configuredLimit = getConfiguredDailySendLimit_();
+    } catch (configErr) {
+      return recordBlockedNotification_(
+        notificationData,
+        'BLOCKED_CONFIG',
+        configErr.message || String(configErr)
+      );
     }
-  } catch (sentLogErr) {
-    sentLogError = sentLogErr.message || String(sentLogErr);
-  }
-  if (!sentLogUpdated) {
-    console.error(
-      'メール送信は成功しましたがNotifications更新に失敗しました: ' +
-        notificationId + ' ' + sentLogError
-    );
-  }
 
-  return {
-    success: true,
-    sent: true,
-    blocked: false,
-    result: 'SENT',
-    notificationId: notificationId,
-    logUpdated: sentLogUpdated,
-    logError: sentLogError
-  };
+    // PENDINGは「送信結果が不確実な予約」として扱い、自動再送しない。
+    // FAILEDだけが再試行可能。SENT更新失敗でPENDINGが残っても二重送信を防ぐ。
+    var permitId = String(notificationData.permit_id || '').trim();
+    var stage = String(notificationData.stage || '').trim();
+    if (permitId && stage) {
+      try {
+        if (NotificationsModel.hasBeenReservedOrSent(permitId, stage)) {
+          return recordBlockedNotification_(
+            notificationData,
+            'BLOCKED_DUPLICATE_RESERVATION',
+            '同一許可・同一ステージのPENDINGまたはSENTが既に存在します'
+          );
+        }
+      } catch (duplicateCheckErr) {
+        return recordBlockedNotification_(
+          notificationData,
+          'BLOCKED_LOG_FAILURE',
+          '重複送信を確認できません: ' +
+            (duplicateCheckErr.message || String(duplicateCheckErr))
+        );
+      }
+    }
+
+    // PENDINGを予約済みとして数え、並行実行時の日次上限超過を抑止する。
+    var reservedOrSent;
+    try {
+      reservedOrSent = NotificationsModel.countReservedOrSentToday();
+    } catch (countErr) {
+      return recordBlockedNotification_(
+        notificationData,
+        'BLOCKED_LOG_FAILURE',
+        '送信済み件数を確認できません: ' + (countErr.message || String(countErr))
+      );
+    }
+    if (reservedOrSent >= configuredLimit) {
+      return recordBlockedNotification_(
+        notificationData,
+        'BLOCKED_CONFIG_LIMIT',
+        '設定上の日次送信上限に達しました: ' + configuredLimit
+      );
+    }
+
+    var providerRemaining;
+    try {
+      providerRemaining = Number(MailApp.getRemainingDailyQuota());
+    } catch (quotaErr) {
+      return recordBlockedNotification_(
+        notificationData,
+        'BLOCKED_QUOTA_CHECK',
+        'Gmail実残量を確認できません: ' + (quotaErr.message || String(quotaErr))
+      );
+    }
+    if (!Number.isFinite(providerRemaining) || providerRemaining < recipientCount) {
+      return recordBlockedNotification_(
+        notificationData,
+        'BLOCKED_PROVIDER_QUOTA',
+        'Gmail実残量が不足しています: remaining=' + providerRemaining +
+          ', required=' + recipientCount
+      );
+    }
+
+    // 送信前にintentを記録する。記録失敗時は送信しない。
+    notificationData.result = 'PENDING';
+    var created;
+    try {
+      created = NotificationsModel.create(notificationData);
+    } catch (intentErr) {
+      console.error(
+        'PENDING記録に失敗したためメールを送信しません: ' +
+          (intentErr.message || String(intentErr))
+      );
+      return {
+        success: false,
+        sent: false,
+        blocked: true,
+        result: 'BLOCKED_LOG_FAILURE',
+        message: intentErr.message || String(intentErr)
+      };
+    }
+    var notificationId = created.notification_id;
+
+    try {
+      GmailApp.sendEmail(to, subject, body, options);
+    } catch (sendErr) {
+      try {
+        NotificationsModel.updateById(notificationId, {
+          result: 'FAILED',
+          error_message: sendErr.message || String(sendErr)
+        });
+      } catch (failedLogErr) {
+        console.error(
+          '送信失敗後のNotifications更新にも失敗しました: ' +
+            (failedLogErr.message || String(failedLogErr))
+        );
+      }
+      logError('メール送信エラー', sendErr);
+      return {
+        success: false,
+        sent: false,
+        blocked: false,
+        result: 'FAILED',
+        message: sendErr.message || String(sendErr),
+        notificationId: notificationId
+      };
+    }
+
+    // ここへ到達した時点でGmail送信は成功済み。ログ更新失敗と混同しない。
+    var sentLogUpdated = false;
+    var sentLogError = '';
+    try {
+      sentLogUpdated = NotificationsModel.updateById(
+        notificationId,
+        { result: 'SENT', error_message: '' }
+      );
+      if (!sentLogUpdated) {
+        sentLogError = 'notification_idが見つかりません';
+      }
+    } catch (sentLogErr) {
+      sentLogError = sentLogErr.message || String(sentLogErr);
+    }
+    if (!sentLogUpdated) {
+      console.error(
+        'メール送信は成功しましたがNotifications更新に失敗しました: ' +
+          notificationId + ' ' + sentLogError
+      );
+    }
+
+    return {
+      success: true,
+      sent: true,
+      blocked: false,
+      result: 'SENT',
+      notificationId: notificationId,
+      logUpdated: sentLogUpdated,
+      logError: sentLogError
+    };
+  } finally {
+    try {
+      sendLock.releaseLock();
+    } catch (releaseErr) {
+      console.error(
+        '送信排他ロックの解放に失敗しました: ' +
+          (releaseErr.message || String(releaseErr))
+      );
+    }
+  }
 }
 
 /**

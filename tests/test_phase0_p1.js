@@ -23,6 +23,18 @@ function createUtilsContext(configOverrides) {
   const sentEmails = [];
   const consoleMessages = [];
   let providerQuota = 100;
+  let sendLockHeld = false;
+
+  const sendLock = {
+    tryLock() {
+      if (sendLockHeld) return false;
+      sendLockHeld = true;
+      return true;
+    },
+    releaseLock() {
+      sendLockHeld = false;
+    }
+  };
 
   const context = {
     Date,
@@ -56,7 +68,17 @@ function createUtilsContext(configOverrides) {
       },
       countReservedOrSentToday() {
         return notifications.filter(item => item.result === 'PENDING' || item.result === 'SENT').length;
+      },
+      hasBeenReservedOrSent(permitId, stage) {
+        return notifications.some(item =>
+          String(item.permit_id || '') === String(permitId) &&
+          String(item.stage || '') === String(stage) &&
+          (item.result === 'PENDING' || item.result === 'SENT')
+        );
       }
+    },
+    LockService: {
+      getScriptLock: () => sendLock
     },
     MailApp: {
       getRemainingDailyQuota: () => providerQuota
@@ -79,6 +101,9 @@ function createUtilsContext(configOverrides) {
     notifications,
     sentEmails,
     consoleMessages,
+    isSendLockHeld() {
+      return sendLockHeld;
+    },
     setProviderQuota(value) {
       providerQuota = value;
     }
@@ -245,6 +270,119 @@ test('メール送信成功後のSENTログ更新失敗を送信失敗と誤判�
   assert.equal(context.__state.sentEmails.length, 1);
 });
 
+test('送信成功後にSENT更新が失敗してPENDINGが残っても次回は再送しない', () => {
+  const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
+  context.NotificationsModel.updateById = () => {
+    throw new Error('update unavailable');
+  };
+  const params = {
+    to: 'vendor@example.com',
+    subject: 'subject',
+    body: 'body',
+    options: {},
+    notification: { permit_id: 'P-001', stage: '90' }
+  };
+
+  const first = context.sendSystemEmail_(params);
+  const second = context.sendSystemEmail_(params);
+
+  assert.equal(first.sent, true);
+  assert.equal(context.__state.notifications[0].result, 'PENDING');
+  assert.equal(second.sent, false);
+  assert.equal(second.result, 'BLOCKED_DUPLICATE_RESERVATION');
+  assert.equal(context.__state.sentEmails.length, 1);
+});
+
+test('FAILEDは再試行可能で、PENDINGとSENTだけが重複送信を止める', () => {
+  const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
+  const originalSend = context.GmailApp.sendEmail;
+  context.GmailApp.sendEmail = () => {
+    throw new Error('simulated failure');
+  };
+  const params = {
+    to: 'vendor@example.com',
+    subject: 'subject',
+    body: 'body',
+    options: {},
+    notification: { permit_id: 'P-002', stage: '60' }
+  };
+  const first = context.sendSystemEmail_(params);
+  context.GmailApp.sendEmail = originalSend;
+  const second = context.sendSystemEmail_(params);
+
+  assert.equal(first.result, 'FAILED');
+  assert.equal(second.result, 'SENT');
+  assert.equal(context.__state.sentEmails.length, 1);
+});
+
+test('上限確認から結果更新まで共通ScriptLockを保持する', () => {
+  const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
+  const originalCount = context.NotificationsModel.countReservedOrSentToday;
+  const originalQuota = context.MailApp.getRemainingDailyQuota;
+  const originalCreate = context.NotificationsModel.create;
+  const originalSend = context.GmailApp.sendEmail;
+  const originalUpdate = context.NotificationsModel.updateById;
+
+  context.NotificationsModel.countReservedOrSentToday = () => {
+    assert.equal(context.__state.isSendLockHeld(), true);
+    return originalCount();
+  };
+  context.MailApp.getRemainingDailyQuota = () => {
+    assert.equal(context.__state.isSendLockHeld(), true);
+    return originalQuota();
+  };
+  context.NotificationsModel.create = data => {
+    assert.equal(context.__state.isSendLockHeld(), true);
+    return originalCreate(data);
+  };
+  context.GmailApp.sendEmail = (...args) => {
+    assert.equal(context.__state.isSendLockHeld(), true);
+    return originalSend(...args);
+  };
+  context.NotificationsModel.updateById = (id, updates) => {
+    assert.equal(context.__state.isSendLockHeld(), true);
+    return originalUpdate(id, updates);
+  };
+
+  const result = context.sendSystemEmail_({
+    to: 'vendor@example.com',
+    subject: 'subject',
+    body: 'body',
+    options: {},
+    notification: { permit_id: 'P-003', stage: '30' }
+  });
+  assert.equal(result.result, 'SENT');
+  assert.equal(context.__state.isSendLockHeld(), false);
+});
+
+test('競合実行は共通ScriptLockで止まり、Gmail送信は1回だけ', () => {
+  const context = createUtilsContext({ ENABLE_SEND: 'TRUE' });
+  let competingResult = null;
+  const originalSend = context.GmailApp.sendEmail;
+  context.GmailApp.sendEmail = (...args) => {
+    competingResult = context.sendSystemEmail_({
+      to: 'other@example.com',
+      subject: 'competing',
+      body: 'body',
+      options: {},
+      notification: { permit_id: 'P-004', stage: '90' }
+    });
+    return originalSend(...args);
+  };
+
+  const first = context.sendSystemEmail_({
+    to: 'vendor@example.com',
+    subject: 'first',
+    body: 'body',
+    options: {},
+    notification: { permit_id: 'P-004', stage: '90' }
+  });
+
+  assert.equal(first.result, 'SENT');
+  assert.equal(competingResult.result, 'BLOCKED_SEND_LOCK');
+  assert.equal(context.__state.sentEmails.length, 1);
+});
+
 test('設定上限到達後はループ途中でも次の送信を止める', () => {
   const context = createUtilsContext({
     ENABLE_SEND: 'TRUE',
@@ -294,7 +432,7 @@ test('不正な通知日数では日次処理を1件も開始しない', () => {
   let permitReads = 0;
   let alertCalls = 0;
   context.LockService = {
-    getScriptLock: () => ({
+    getDocumentLock: () => ({
       waitLock() {},
       releaseLock() {}
     })
@@ -333,6 +471,8 @@ test('危険な通知入口は公開トップレベル関数として残さな�
   const utils = readSource('Utils.gs');
   const scheduler = readSource('Scheduler.gs');
   const ui = readSource('Ui.gs');
+  const api = readSource('api.gs');
+  const index = readSource('index.html');
   assert.doesNotMatch(utils, /function\s+sendErrorAlert\s*\(/);
   assert.match(utils, /function\s+sendErrorAlert_\s*\(/);
   assert.doesNotMatch(scheduler, /function\s+runDailyNotifications\s*\(/);
@@ -342,6 +482,9 @@ test('危険な通知入口は公開トップレベル関数として残さな�
   assert.doesNotMatch(ui, /function\s+setupDailyTrigger\s*\(/);
   assert.match(ui, /function\s+setupDailyTrigger_\s*\(/);
   assert.match(ui, /ScriptApp\.newTrigger\(FUNCTION_NAME\)/);
+  assert.doesNotMatch(api, /function\s+apiSendNotification\s*\(/);
+  assert.doesNotMatch(index, /今すぐ通知送信/);
+  assert.doesNotMatch(index, /function\s+sendNotification\s*\(/);
 });
 
 test('Phase 0中の危険メニューを表示しない', () => {
@@ -354,17 +497,28 @@ test('Phase 0中の危険メニューを表示しない', () => {
   assert.doesNotMatch(onOpenSource, /日次トリガー設定/);
 });
 
-test('手動通知UIはsent=falseを成功表示しない', () => {
-  const index = readSource('index.html');
-  assert.match(index, /if \(r && r\.sent\)/);
-  assert.match(index, /送信されませんでした/);
-  assert.doesNotMatch(index, /if \(r\.dryRun\)/);
+test('Schedulerの外側ロックは送信ゲートと別種で自己デッドロックを避ける', () => {
+  const scheduler = readSource('Scheduler.gs');
+  assert.match(scheduler, /function\s+runDailyNotifications_\s*\(\)[\s\S]*?getDocumentLock\(\)/);
+  assert.doesNotMatch(
+    scheduler,
+    /function\s+runDailyNotifications_\s*\(\)[\s\S]*?getScriptLock\(\)/
+  );
 });
 
 test('Webアプリ公開範囲をMYSELFに固定する', () => {
   const manifest = JSON.parse(readSource('appsscript.json'));
   assert.equal(manifest.webapp.access, 'MYSELF');
   assert.equal(manifest.webapp.executeAs, 'USER_DEPLOYING');
+  assert.ok(
+    manifest.oauthScopes.includes('https://www.googleapis.com/auth/script.send_mail'),
+    'MailApp.getRemainingDailyQuota()に必要なscope'
+  );
+});
+
+test('GMAIL_DAILY_LIMITを必須設定として検査する', () => {
+  const config = readSource('Config.gs');
+  assert.match(config, /REQUIRED_KEYS[\s\S]*?'GMAIL_DAILY_LIMIT'/);
 });
 
 let failures = 0;

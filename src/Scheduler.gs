@@ -8,7 +8,9 @@
  * @return {Object} 実行結果
  */
 function runDailyNotifications_() {
-  var lock = LockService.getScriptLock();
+  // 送信ゲートがScriptLockを使うため、バッチ多重実行防止はDocumentLockで分離する。
+  // このプロジェクトはスプレッドシートにバインドされたスクリプト。
+  var lock = LockService.getDocumentLock();
   try {
     lock.waitLock(60000);
   } catch (lockErr) {
@@ -109,7 +111,7 @@ function processPermit_(permit, stageDays) {
 function determineStage_(days, stageDays, permitId) {
   // EXPIRED チェック
   if (days < 0) {
-    if (!NotificationsModel.hasBeenSent(permitId, 'EXPIRED')) {
+    if (!NotificationsModel.hasBeenReservedOrSent(permitId, 'EXPIRED')) {
       return 'EXPIRED';
     }
   }
@@ -117,7 +119,7 @@ function determineStage_(days, stageDays, permitId) {
   // 各ステージを昇順（小→大）で走査し、最も緊急な未送信ステージを返す
   for (var i = stageDays.length - 1; i >= 0; i--) {
     var sd = stageDays[i];
-    if (days <= sd && !NotificationsModel.hasBeenSent(permitId, String(sd))) {
+    if (days <= sd && !NotificationsModel.hasBeenReservedOrSent(permitId, String(sd))) {
       return String(sd);
     }
   }
