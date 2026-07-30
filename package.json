@@ -10,7 +10,8 @@
     "test:phase0-p1": "node tests/test_phase0_p1.js",
     "test:secure-master": "node tests/test_secure_master.js",
     "test:mlit-sync": "node tests/test_mlit_sync.js",
-    "test:gas": "npm run test:phase0-p1 && npm run test:secure-master && npm run test:mlit-sync"
+    "test:operational-controls": "node tests/test_operational_controls.js",
+    "test:gas": "npm run test:phase0-p1 && npm run test:secure-master && npm run test:mlit-sync && npm run test:operational-controls"
   },
   "devDependencies": {
     "@google/clasp": "^2.4.2"

@@ -58,6 +58,35 @@ function ensureSheetByName_(sheetName, headers) {
   };
 }
 
+function ensureIntegerColumnFormat_(sheetName, headerName) {
+  var sheet = getSheet_(sheetName);
+  var lastColumn = sheet.getLastColumn();
+  if (lastColumn < 1) {
+    throw appError_(
+      'SCHEMA_HEADER_MISSING',
+      sheetName + 'のheaderが見つかりません',
+      false
+    );
+  }
+  var headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  var columnIndex = headers.indexOf(headerName) + 1;
+  if (columnIndex < 1) {
+    throw appError_(
+      'SCHEMA_HEADER_MISSING',
+      sheetName + 'に' + headerName + '列がありません',
+      false
+    );
+  }
+  var dataRowCount = Math.max(sheet.getMaxRows() - 1, 1);
+  sheet.getRange(2, columnIndex, dataRowCount, 1).setNumberFormat('0');
+  return {
+    sheet: sheetName,
+    header: headerName,
+    column: columnIndex,
+    numberFormat: '0'
+  };
+}
+
 function backfillCompanySystemFields_() {
   var companies = readRecords_(SHEETS.Companies);
   var changed = 0;
@@ -260,6 +289,16 @@ function ensureApplicationSchemaSecure_(payload, user, requestId) {
   results.MasterImportStaging = ensureSheetByName_(
     SHEETS.MasterImportStaging, MASTER_IMPORT_STAGING_HEADERS
   ).result;
+  results.PermitImportStaging = ensureSheetByName_(
+    SHEETS.PermitImportStaging, PERMIT_IMPORT_STAGING_HEADERS_
+  ).result;
+  results.MonitoringTargetStaging = ensureSheetByName_(
+    SHEETS.MonitoringTargetStaging, MONITORING_TARGET_STAGING_HEADERS_
+  ).result;
+  results.VersionFormats = [
+    ensureIntegerColumnFormat_(SHEETS.Companies, 'data_version'),
+    ensureIntegerColumnFormat_(SHEETS.Permits, 'permit_data_version')
+  ];
 
   if (!getSecureSetting_('NOTIFICATION_MODE')) {
     setSecureSetting_('NOTIFICATION_MODE', 'OFF');
@@ -291,7 +330,9 @@ function ensureApplicationSchemaSecure_(payload, user, requestId) {
       SHEETS.NotificationQueue,
       SHEETS.Notifications,
       SHEETS.AuditLog,
-      SHEETS.MasterImportStaging
+      SHEETS.MasterImportStaging,
+      SHEETS.PermitImportStaging,
+      SHEETS.MonitoringTargetStaging
     ].forEach(function(name) {
       protectedSheets.push(protectSheetForOwner_(name));
     });

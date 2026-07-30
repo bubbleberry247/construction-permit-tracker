@@ -50,7 +50,7 @@ function getModePolicy_(mode) {
     autoStages: normalized === 'AUTO_ALL'
       ? ['90', '60', '30', '0', 'EXPIRED']
       : normalized === 'AUTO_STANDARD_ALL'
-        ? ['90', '60', '30', '0']
+        ? ['90', '60', '30']
         : ['90', '60']
   };
 }
@@ -596,6 +596,117 @@ function regenerateNotificationCandidate_(payload, user, requestId) {
   return { item: serializeQueueItem_(outcome.record), auditId: audit.log_id };
 }
 
+/**
+ * Gmail送信後の記録障害を、運用管理者がGmail送信済みと照合して解決する。
+ * CONFIRMED_NOT_SENTの場合だけNotificationsをFAILEDへ変更し、再生成を可能にする。
+ */
+function reconcileNotificationCandidate_(payload, user, requestId) {
+  assertOnlyKeys_(
+    payload,
+    ['queueId', 'outcome', 'evidenceNote'],
+    'notifications.reconcile'
+  );
+  var queueId = normalizeTextInput_(payload.queueId, 100, 'queueId');
+  var outcome = String(payload.outcome || '').trim().toUpperCase();
+  var evidenceNote = normalizeTextInput_(payload.evidenceNote, 500, '照合証跡');
+  if (['CONFIRMED_SENT', 'CONFIRMED_NOT_SENT'].indexOf(outcome) < 0 ||
+      !evidenceNote) {
+    throw appError_(
+      'INVALID_RECONCILIATION',
+      '照合結果とGmail送信済みを確認した証跡を入力してください',
+      false
+    );
+  }
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    throw appError_('LOCK_TIMEOUT', '送信照合処理が混雑しています', true);
+  }
+  try {
+    var queue = getQueueById_(queueId);
+    if (!queue) throw appError_('NOT_FOUND', '通知候補が見つかりません', false);
+    if (String(queue.status || '') !== 'PENDING_RECONCILIATION') {
+      throw appError_(
+        'NOT_RECONCILABLE',
+        '要照合状態の通知候補だけを確定できます',
+        false
+      );
+    }
+    var notificationId = String(queue.notification_id || '').trim();
+    if (!notificationId ||
+        !findByKey_(SHEETS.Notifications, 'notification_id', notificationId)) {
+      throw appError_(
+        'NOTIFICATION_LOG_MISSING',
+        '対応するNotifications記録が見つかりません',
+        false
+      );
+    }
+
+    var prepared = appendAuditEvent_({
+      user_email: user.email,
+      actor_role: user.role,
+      action: 'RECONCILE_NOTIFICATION',
+      target_type: 'NotificationQueue',
+      target_id: queueId,
+      request_id: requestId,
+      reason_note: evidenceNote,
+      before_json: JSON.stringify({
+        queueStatus: queue.status,
+        notificationId: notificationId
+      }),
+      after_json: JSON.stringify({ outcome: outcome }),
+      status: 'PREPARED'
+    });
+
+    var notificationResult = outcome === 'CONFIRMED_SENT' ? 'SENT' : 'FAILED';
+    var queueStatus = outcome === 'CONFIRMED_SENT' ? 'SENT' : 'FAILED';
+    if (!NotificationsModel.updateById(notificationId, {
+      result: notificationResult,
+      error_message: outcome === 'CONFIRMED_SENT'
+        ? ''
+        : 'Gmail送信済みフォルダで未送信を確認: ' + evidenceNote
+    })) {
+      updateAuditEvent_(prepared.log_id, {
+        status: 'ABORTED',
+        error_code: 'NOTIFICATION_UPDATE_FAILED'
+      });
+      throw appError_(
+        'NOTIFICATION_UPDATE_FAILED',
+        'Notifications記録を更新できませんでした',
+        true,
+        prepared.log_id
+      );
+    }
+    updateRecord_(SHEETS.NotificationQueue, queue._row, {
+      status: queueStatus,
+      updated_at: getNowString_(),
+      sent_at: outcome === 'CONFIRMED_SENT'
+        ? (queue.sent_at || getNowString_())
+        : '',
+      error_code: outcome === 'CONFIRMED_SENT' ? '' : 'CONFIRMED_NOT_SENT',
+      error_message: outcome === 'CONFIRMED_SENT' ? '' : evidenceNote
+    });
+    SpreadsheetApp.flush();
+    updateAuditEvent_(prepared.log_id, {
+      status: 'COMMITTED',
+      details: JSON.stringify({
+        notificationId: notificationId,
+        outcome: outcome,
+        evidenceNote: evidenceNote
+      })
+    });
+    SpreadsheetApp.flush();
+    return {
+      queueId: queueId,
+      status: queueStatus,
+      notificationResult: notificationResult,
+      auditId: prepared.log_id
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function countBusinessDaysSince_(dateValue) {
   var start = new Date(dateValue);
   if (isNaN(start.getTime())) return 0;
@@ -630,14 +741,19 @@ function getModePromotionEvidence_() {
     businessDays: businessDays,
     sentCount: sentCount,
     unresolvedCount: unresolved,
-    eligible: businessDays >= 10 && sentCount >= 5 && unresolved === 0
+    eligible: businessDays >= 10 && sentCount >= 5 && unresolved === 0,
+    lowVolumeEligible:
+      businessDays >= 10 && sentCount >= 1 && sentCount < 5 && unresolved === 0
   };
 }
 
 function setNotificationModeSecure_(payload, user, requestId) {
   assertOnlyKeys_(
     payload,
-    ['mode', 'reason', 'confirmNoIncidents', 'confirmReconciled'],
+    [
+      'mode', 'reason', 'confirmNoIncidents', 'confirmReconciled',
+      'confirmLowVolumeWaiver', 'lowVolumeWaiverReason'
+    ],
     'operations.setNotificationMode'
   );
   var requested = String(payload.mode || '').trim().toUpperCase();
@@ -651,12 +767,19 @@ function setNotificationModeSecure_(payload, user, requestId) {
   if (requested === current) return { mode: current, changed: false };
 
   var evidence = getModePromotionEvidence_();
+  var lowVolumeWaiverReason = normalizeTextInput_(
+    payload.lowVolumeWaiverReason, 300, '低件数例外理由'
+  );
+  var useLowVolumeWaiver =
+    payload.confirmLowVolumeWaiver === true &&
+    !!lowVolumeWaiverReason &&
+    evidence.lowVolumeEligible;
   if (requested !== 'OFF' && requestedIndex > currentIndex) {
     if (requestedIndex !== currentIndex + 1) {
       throw appError_('MODE_SEQUENCE', 'modeは1段階ずつ昇格してください', false);
     }
     if (current !== 'OFF' &&
-        (!evidence.eligible ||
+        ((!evidence.eligible && !useLowVolumeWaiver) ||
          payload.confirmNoIncidents !== true ||
          payload.confirmReconciled !== true)) {
       throw appError_('PROMOTION_GATE_NOT_MET', '昇格条件を満たしていません', false);
@@ -677,10 +800,20 @@ function setNotificationModeSecure_(payload, user, requestId) {
     reason_note: reason,
     before_json: JSON.stringify({ mode: current }),
     after_json: JSON.stringify({ mode: requested }),
-    details: JSON.stringify(evidence),
+    details: JSON.stringify({
+      evidence: evidence,
+      lowVolumeWaiverUsed: useLowVolumeWaiver,
+      lowVolumeWaiverReason: useLowVolumeWaiver ? lowVolumeWaiverReason : ''
+    }),
     status: 'COMMITTED'
   });
-  return { mode: requested, changed: true, evidence: evidence, auditId: audit.log_id };
+  return {
+    mode: requested,
+    changed: true,
+    evidence: evidence,
+    lowVolumeWaiverUsed: useLowVolumeWaiver,
+    auditId: audit.log_id
+  };
 }
 
 function getOperationsStatus_(payload) {
@@ -715,6 +848,12 @@ function getOperationsStatus_(payload) {
       needsSetup: companies.length - ready
     },
     promotionEvidence: getModePromotionEvidence_(),
+    sender: typeof getOutboundSenderStatus_ === 'function'
+      ? getOutboundSenderStatus_()
+      : { configured: false, valid: false },
+    managedTriggers: typeof getManagedTriggerStatus_ === 'function'
+      ? getManagedTriggerStatus_()
+      : { total: 0, handlers: {} },
     backup: {
       lastAt: getSecureSetting_('LAST_BACKUP_DISPLAY_AT') ||
         getSecureSetting_('LAST_BACKUP_AT'),

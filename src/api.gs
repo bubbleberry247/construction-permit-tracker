@@ -39,6 +39,10 @@ var API_ACTIONS_ = {
     capability: 'notifications.review',
     handler: apiNotificationsRegenerate_
   },
+  'notifications.reconcile': {
+    capability: 'notifications.reconcile',
+    handler: apiNotificationsReconcile_
+  },
   'mlit.listDiffs': {
     capability: 'mlit.read',
     handler: apiMlitListDiffs_
@@ -231,6 +235,10 @@ function apiNotificationsCancel_(payload, user, requestId) {
 
 function apiNotificationsRegenerate_(payload, user, requestId) {
   return regenerateNotificationCandidate_(payload, user, requestId);
+}
+
+function apiNotificationsReconcile_(payload, user, requestId) {
+  return reconcileNotificationCandidate_(payload, user, requestId);
 }
 
 function apiMlitListDiffs_(payload, user) {

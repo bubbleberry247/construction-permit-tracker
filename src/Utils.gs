@@ -182,6 +182,93 @@ function validateOutboundEnvelope_(to, subject, options) {
 }
 
 /**
+ * 所有者実行のGASが、想定した会社アカウントから送信されることを検証する。
+ * Session情報は送信主体の検査だけに使い、ログイン利用者の認証には使わない。
+ */
+function getOutboundSenderStatus_() {
+  function readSenderSetting_(key) {
+    return typeof getSecureSetting_ === 'function'
+      ? getSecureSetting_(key)
+      : getConfig_(key);
+  }
+  function normalizeSenderEmail_(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  var expectedAccount = normalizeSenderEmail_(
+    readSenderSetting_('MAIL_SENDER_EMAIL')
+  );
+  var replyTo = normalizeSenderEmail_(readSenderSetting_('MAIL_REPLY_TO'));
+  var displayName = String(readSenderSetting_('MAIL_SENDER_NAME') || '').trim();
+  var fromAlias = normalizeSenderEmail_(readSenderSetting_('MAIL_FROM_ALIAS'));
+  var effectiveAccount = '';
+  var errors = [];
+
+  try {
+    effectiveAccount = normalizeSenderEmail_(
+      Session.getEffectiveUser().getEmail()
+    );
+  } catch (effectiveUserError) {
+    errors.push('実行アカウントを確認できません');
+  }
+  if (!isSafeOutboundEmail_(expectedAccount)) {
+    errors.push('MAIL_SENDER_EMAILが未設定または不正です');
+  }
+  if (!isSafeOutboundEmail_(replyTo)) {
+    errors.push('MAIL_REPLY_TOが未設定または不正です');
+  }
+  if (!displayName ||
+      displayName.length > 100 ||
+      /[\r\n\u0000-\u001f\u007f]/.test(displayName)) {
+    errors.push('MAIL_SENDER_NAMEが未設定または不正です');
+  }
+  if (expectedAccount && effectiveAccount &&
+      expectedAccount !== effectiveAccount) {
+    errors.push('実行アカウントがMAIL_SENDER_EMAILと一致しません');
+  }
+  if (fromAlias) {
+    if (!isSafeOutboundEmail_(fromAlias)) {
+      errors.push('MAIL_FROM_ALIASが不正です');
+    } else {
+      try {
+        var aliases = GmailApp.getAliases().map(normalizeSenderEmail_);
+        if (aliases.indexOf(fromAlias) < 0) {
+          errors.push('MAIL_FROM_ALIASがGmailの送信元aliasにありません');
+        }
+      } catch (aliasError) {
+        errors.push('Gmailの送信元aliasを確認できません');
+      }
+    }
+  }
+  return {
+    configured: !!expectedAccount && !!replyTo && !!displayName,
+    valid: errors.length === 0,
+    senderEmail: fromAlias || expectedAccount,
+    executionAccount: effectiveAccount,
+    replyTo: replyTo,
+    displayName: displayName,
+    fromAlias: fromAlias,
+    errors: errors
+  };
+}
+
+function applyOutboundSenderSettings_(options) {
+  var status = getOutboundSenderStatus_();
+  if (!status.valid) {
+    var error = new Error(
+      status.errors.join(' / ') || '送信元設定を確認できません'
+    );
+    error.code = 'SENDER_IDENTITY_BLOCKED';
+    throw error;
+  }
+  var resolved = Object.assign({}, options || {});
+  resolved.name = status.displayName;
+  resolved.replyTo = status.replyTo;
+  if (status.fromAlias) resolved.from = status.fromAlias;
+  return resolved;
+}
+
+/**
  * 送信を行わなかった理由をNotificationsへ記録する。
  * 記録できない場合も実行ログへ残し、メール送信へ進ませない。
  * @param {Object} notificationData
@@ -388,6 +475,16 @@ function sendSystemEmail_(params) {
           systemPolicyError.message || String(systemPolicyError)
         );
       }
+    }
+
+    try {
+      options = applyOutboundSenderSettings_(options);
+    } catch (senderError) {
+      return recordBlockedNotification_(
+        notificationData,
+        String(senderError.code || 'SENDER_IDENTITY_BLOCKED'),
+        senderError.message || String(senderError)
+      );
     }
 
     var configuredLimit;

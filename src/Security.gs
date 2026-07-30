@@ -22,7 +22,7 @@ var ROLE_CAPABILITIES_ = {
   operations_admin: [
     'session.read', 'dashboard.read',
     'companies.read', 'companies.edit_contacts', 'companies.revert',
-    'notifications.review', 'notifications.send',
+    'notifications.review', 'notifications.send', 'notifications.reconcile',
     'mlit.read', 'mlit.request_refresh', 'mlit.apply_diff', 'mlit.configure',
     'companies.manage_monitoring',
     'operations.read', 'operations.write',
@@ -37,7 +37,7 @@ var ROLE_CAPABILITIES_ = {
   legacy_admin: [
     'session.read', 'dashboard.read',
     'companies.read', 'companies.edit_contacts', 'companies.revert',
-    'notifications.review', 'notifications.send',
+    'notifications.review', 'notifications.send', 'notifications.reconcile',
     'mlit.read', 'mlit.request_refresh', 'mlit.apply_diff', 'mlit.configure',
     'companies.manage_monitoring',
     'operations.read', 'operations.write',

@@ -140,6 +140,12 @@ function baseContext() {
       Object.assign(row, updates);
       return true;
     },
+    updateAuditEvent_: (logId, updates) => {
+      const row = rows.AuditLog.find(item => item.log_id === logId);
+      if (!row) return false;
+      Object.assign(row, updates);
+      return true;
+    },
     getCompanyDetail_: companyId => ({
       company: rows.Companies.find(row => row.company_id === companyId),
       permits: [], notifications: [], auditLog: []
@@ -541,6 +547,260 @@ test('INTERNAL_TESTは実宛先を内部許可宛先へ置換する', () => {
   assert.equal(prepared.to, 'internal@example.com');
   assert.match(prepared.subject, /内部テスト/);
   assert.notEqual(prepared.to, 'old@example.com');
+});
+
+test('期限切れの自動送信はAUTO_ALLだけに限定する', () => {
+  const context = baseContext();
+  assert.deepEqual(
+    Array.from(context.getModePolicy_('AUTO_STANDARD_ALL').autoStages),
+    ['90', '60', '30']
+  );
+  assert.deepEqual(
+    Array.from(context.getModePolicy_('AUTO_ALL').autoStages),
+    ['90', '60', '30', '0', 'EXPIRED']
+  );
+});
+
+test('送信結果の要照合は運用管理者だけが証跡付きで確定できる', () => {
+  const context = baseContext();
+  assert.equal(
+    context.ROLE_CAPABILITIES_.operations_admin.includes('notifications.reconcile'),
+    true
+  );
+  assert.equal(
+    context.ROLE_CAPABILITIES_.master_editor.includes('notifications.reconcile'),
+    false
+  );
+  context.__rows.NotificationQueue[0].status = 'PENDING_RECONCILIATION';
+  context.__rows.NotificationQueue[0].notification_id = 'N1';
+  context.__rows.Notifications.push({
+    _row: 2,
+    notification_id: 'N1',
+    result: 'PENDING_RECONCILIATION'
+  });
+  context.NotificationsModel = {
+    updateById: (id, updates) => {
+      const notification = context.__rows.Notifications.find(
+        row => row.notification_id === id
+      );
+      if (!notification) return false;
+      Object.assign(notification, updates);
+      return true;
+    }
+  };
+  const result = context.reconcileNotificationCandidate_({
+    queueId: 'Q1',
+    outcome: 'CONFIRMED_SENT',
+    evidenceNote: 'Gmail送信済みでMessage-IDを確認'
+  }, {
+    email: 'kanri.tic@tokai-ic.co.jp',
+    role: 'operations_admin'
+  }, 'request_reconcile1');
+  assert.equal(result.status, 'SENT');
+  assert.equal(context.__rows.NotificationQueue[0].status, 'SENT');
+  assert.equal(context.__rows.Notifications[0].result, 'SENT');
+  assert.equal(context.__rows.AuditLog[0].status, 'COMMITTED');
+});
+
+test('監査更新はappend戻り値の行番号に依存せずlog_idで再取得する', () => {
+  const migrationAndQueue = [
+    source('PermitMigration.gs'),
+    source('NotificationQueue.gs')
+  ].join('\n');
+  assert.doesNotMatch(migrationAndQueue, /(?:audit|prepared)\._row/);
+  assert.match(source('db.gs'), /function updateAuditEvent_\(/);
+  assert.match(
+    source('db.gs'),
+    /findByKey_\(SHEETS\.AuditLog,\s*'log_id',\s*logId\)/
+  );
+});
+
+test('低件数期間のmode昇格は10営業日・1件以上・未解決0件と理由を必須にする', () => {
+  const context = baseContext();
+  context.__properties.NOTIFICATION_MODE = 'INTERNAL_TEST';
+  context.__properties.NOTIFICATION_MODE_CHANGED_AT = '2026-07-01T00:00:00+09:00';
+  context.__rows.NotificationQueue.length = 0;
+  context.__rows.Notifications.push({
+    _row: 2,
+    notification_id: 'N1',
+    result: 'SENT',
+    sent_at: '2026-07-15T00:00:00+09:00'
+  });
+  const user = {
+    email: 'kanri.tic@tokai-ic.co.jp',
+    role: 'operations_admin'
+  };
+  assert.throws(
+    () => context.setNotificationModeSecure_({
+      mode: 'MANUAL_PILOT',
+      reason: 'pilotへ移行',
+      confirmNoIncidents: true,
+      confirmReconciled: true
+    }, user, 'request_lowvolume0'),
+    error => error.code === 'PROMOTION_GATE_NOT_MET'
+  );
+  const result = context.setNotificationModeSecure_({
+    mode: 'MANUAL_PILOT',
+    reason: 'pilotへ移行',
+    confirmNoIncidents: true,
+    confirmReconciled: true,
+    confirmLowVolumeWaiver: true,
+    lowVolumeWaiverReason: '期間中の期限通知対象が1件だけだったため'
+  }, user, 'request_lowvolume1');
+  assert.equal(result.mode, 'MANUAL_PILOT');
+  assert.equal(result.lowVolumeWaiverUsed, true);
+  assert.match(context.__rows.AuditLog[0].details, /期限通知対象が1件だけ/);
+});
+
+test('許可移行stagingは承認済み必須項目・重複・未判断を検証する', () => {
+  const context = baseContext();
+  context.PermitsModel = { findByUpsertKey: () => null };
+  vm.runInContext(source('PermitMigration.gs'), context, {
+    filename: 'PermitMigration.gs'
+  });
+  const approved = {
+    migration_row_id: 'PM-0001-01',
+    company_id: 'C0001',
+    permit_authority_name: '岐阜県知事',
+    permit_authority_name_normalized: '岐阜県知事',
+    contractor_number: '99999',
+    permit_category: '一般',
+    expiry_date: '2030-07-30',
+    review_status: 'APPROVED',
+    source_sha256: 'a'.repeat(64)
+  };
+  assert.equal(
+    context.validatePermitImportStaging_([approved], true).approved,
+    1
+  );
+  assert.throws(
+    () => context.validatePermitImportStaging_([
+      approved,
+      {
+        ...approved,
+        migration_row_id: 'PM-0002-01',
+        source_sha256: 'b'.repeat(64)
+      }
+    ], true),
+    error => error.code === 'PERMIT_STAGING_DUPLICATE'
+  );
+  assert.throws(
+    () => context.validatePermitImportStaging_([{
+      ...approved,
+      review_status: 'PENDING'
+    }], true),
+    error => error.code === 'PERMIT_REVIEW_INCOMPLETE'
+  );
+  assert.throws(
+    () => context.validatePermitImportStaging_([{
+      ...approved,
+      expiry_date: '',
+      source_sha256: 'c'.repeat(64)
+    }], true),
+    error => error.code === 'PERMIT_STAGING_FIELDS_REQUIRED'
+  );
+});
+
+test('監視対象移行は全社判断を必須にしINACTIVE会社を監視しない', () => {
+  const context = baseContext();
+  context.PermitsModel = { findByUpsertKey: () => null };
+  vm.runInContext(source('PermitMigration.gs'), context, {
+    filename: 'PermitMigration.gs'
+  });
+  const approved = {
+    company_id: 'C0001',
+    proposed_action: 'MONITOR',
+    review_status: 'APPROVED'
+  };
+  assert.equal(
+    context.validateMonitoringTargetStaging_([approved], true).monitor,
+    1
+  );
+  assert.throws(
+    () => context.validateMonitoringTargetStaging_([{
+      ...approved,
+      review_status: 'PENDING'
+    }], true),
+    error => error.code === 'MONITORING_REVIEW_INCOMPLETE'
+  );
+  context.__rows.Companies[0].status = 'INACTIVE';
+  assert.throws(
+    () => context.validateMonitoringTargetStaging_([approved], true),
+    error => error.code === 'MONITORING_INACTIVE_COMPANY'
+  );
+});
+
+test('会社・許可version列は日付表示を残さず整数形式へ矯正する', () => {
+  const context = baseContext();
+  let appliedFormat = null;
+  context.getSheet_ = () => ({
+    getLastColumn: () => 3,
+    getMaxRows: () => 1000,
+    getRange: (row, column, rowCount, columnCount) => {
+      if (row === 1) {
+        return {
+          getValues: () => [[
+            'permit_id', 'company_id', 'permit_data_version'
+          ]]
+        };
+      }
+      return {
+        setNumberFormat: format => {
+          appliedFormat = { row, column, rowCount, columnCount, format };
+        }
+      };
+    }
+  });
+  vm.runInContext(source('Schema.gs'), context, { filename: 'Schema.gs' });
+  const result = context.ensureIntegerColumnFormat_(
+    context.SHEETS.Permits,
+    'permit_data_version'
+  );
+  assert.equal(result.column, 3);
+  assert.deepEqual(appliedFormat, {
+    row: 2,
+    column: 3,
+    rowCount: 999,
+    columnCount: 1,
+    format: '0'
+  });
+});
+
+test('監視対象移行は監査COMMITTED失敗時に会社versionと監視状態を復元する', () => {
+  const context = baseContext();
+  context.SHEETS.MonitoringTargetStaging = 'MonitoringTargetStaging';
+  context.__rows.MonitoringTargetStaging = [{
+    _row: 2,
+    company_id: 'C0001',
+    proposed_action: 'DO_NOT_MONITOR',
+    review_status: 'APPROVED'
+  }];
+  context.__properties.MONITORING_STAGING_LOADED_SHA256 = 'a'.repeat(64);
+  context.__properties.MONITORING_STAGING_APPLY_CONFIRMATION =
+    `APPLY_MONITORING_STAGING_${'a'.repeat(12)}`;
+  context.assertRecentBackupForMigration_ = () => {};
+  context.PermitsModel = { findByUpsertKey: () => null };
+  vm.runInContext(source('PermitMigration.gs'), context, {
+    filename: 'PermitMigration.gs'
+  });
+  const originalAuditUpdate = context.updateAuditEvent_;
+  context.updateAuditEvent_ = (logId, updates) => {
+    if (updates.status === 'COMMITTED') {
+      return false;
+    }
+    return originalAuditUpdate(logId, updates);
+  };
+  assert.throws(
+    () => context.applyMonitoringTargetMigration_(),
+    error => error.code === 'AUDIT_COMMIT_FAILED'
+  );
+  assert.equal(
+    context.__rows.Companies[0].permit_monitoring_enabled,
+    true
+  );
+  assert.equal(context.__rows.Companies[0].data_version, 1);
+  assert.equal(context.__rows.Companies[0].updated_by, 'm-fujita@tokai-ic.co.jp');
+  assert.equal(context.__rows.AuditLog[0].status, 'ABORTED');
 });
 
 test('マスタ移行は127行・業者番号一意・SYSTEM_ONLYごとの維持除外判断を必須にする', () => {

@@ -17,7 +17,10 @@ function createUtilsContext(configOverrides) {
     ENABLE_SEND: 'FALSE',
     GMAIL_DAILY_LIMIT: '150',
     ADMIN_EMAILS: 'admin@example.com',
-    NOTIFY_STAGES_DAYS: '90,60,30,0'
+    NOTIFY_STAGES_DAYS: '90,60,30,0',
+    MAIL_SENDER_EMAIL: 'system@example.com',
+    MAIL_REPLY_TO: 'reply@example.com',
+    MAIL_SENDER_NAME: '許可証管理'
   }, configOverrides || {});
   const notifications = [];
   const sentEmails = [];
@@ -89,10 +92,14 @@ function createUtilsContext(configOverrides) {
       getRemainingDailyQuota: () => providerQuota
     },
     GmailApp: {
+      getAliases: () => [],
       sendEmail(to, subject, body, options) {
         operationEvents.push('gmail');
         sentEmails.push({ to, subject, body, options });
       }
+    },
+    Session: {
+      getEffectiveUser: () => ({ getEmail: () => 'system@example.com' })
     },
     SpreadsheetApp: {
       flush() {
@@ -300,6 +307,24 @@ test('送信前PENDING・送信後SENTを記録する', () => {
   assert.equal(context.__state.sentEmails.length, 1);
   assert.equal(context.__state.notifications.length, 1);
   assert.equal(context.__state.notifications[0].result, 'SENT');
+  assert.equal(context.__state.sentEmails[0].options.name, '許可証管理');
+  assert.equal(context.__state.sentEmails[0].options.replyTo, 'reply@example.com');
+});
+
+test('実行アカウントが設定送信元と違う場合は送信しない', () => {
+  const context = createUtilsContext({
+    ENABLE_SEND: 'TRUE',
+    MAIL_SENDER_EMAIL: 'kanri@example.com'
+  });
+  const result = context.sendSystemEmail_({
+    to: 'vendor@example.com',
+    subject: 'subject',
+    body: 'body',
+    options: {},
+    notification: { stage: '90' }
+  });
+  assert.equal(result.result, 'SENDER_IDENTITY_BLOCKED');
+  assert.equal(context.__state.sentEmails.length, 0);
 });
 
 test('PENDING記録失敗時はメールを送らない', () => {

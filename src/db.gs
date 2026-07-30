@@ -16,7 +16,9 @@ var SHEETS = {
   SyncRuns: 'SyncRuns',
   UserAccess: 'UserAccess',
   AuthLog: 'AuthLog',
-  MasterImportStaging: 'MasterImportStaging'
+  MasterImportStaging: 'MasterImportStaging',
+  PermitImportStaging: 'PermitImportStaging',
+  MonitoringTargetStaging: 'MonitoringTargetStaging'
 };
 
 // 既存列は順序を変えず、新規列を末尾に追加する。既存データを破壊しないこと。
@@ -60,6 +62,24 @@ var MASTER_IMPORT_STAGING_HEADERS = [
   'review_status', 'reviewed_by', 'reviewed_at', 'notes',
   'source_sha256', 'imported_at'
 ];
+var PERMIT_IMPORT_STAGING_HEADERS_ = [
+  'migration_row_id', 'source_sha256', 'stable_key', 'classification',
+  'review_status', 'reviewer', 'reviewed_at', 'review_note',
+  'permit_id', 'company_id', 'company_name_raw',
+  'permit_authority_name', 'permit_authority_name_normalized',
+  'permit_authority_type', 'permit_category', 'permit_year',
+  'contractor_number', 'permit_number_full', 'trade_categories',
+  'issue_date', 'expiry_date', 'renewal_deadline_date', 'current_status',
+  'mlit_confirmed_date', 'mlit_confirm_result', 'mlit_screenshot_url',
+  'source_file', 'source_file_hash', 'parse_status', 'note',
+  'permit_data_version'
+];
+var MONITORING_TARGET_STAGING_HEADERS_ = [
+  'company_id', 'vendor_no', 'company_name_raw', 'status',
+  'has_permit', 'has_mlit_observation',
+  'proposed_monitoring_enabled', 'proposed_action',
+  'review_status', 'reviewer', 'reviewed_at', 'review_note'
+];
 
 // ---------------------------------------------------------------------------
 // シート取得
@@ -76,6 +96,10 @@ function getSheet_(name) {
     if (name === SHEETS.NotificationQueue) initialHeaders = NOTIFICATION_QUEUE_HEADERS;
     if (name === SHEETS.MLITPermits) initialHeaders = MLIT_PERMITS_HEADERS_;
     if (name === SHEETS.MasterImportStaging) initialHeaders = MASTER_IMPORT_STAGING_HEADERS;
+    if (name === SHEETS.PermitImportStaging) initialHeaders = PERMIT_IMPORT_STAGING_HEADERS_;
+    if (name === SHEETS.MonitoringTargetStaging) {
+      initialHeaders = MONITORING_TARGET_STAGING_HEADERS_;
+    }
     if (initialHeaders) {
       sheet.getRange(1, 1, 1, initialHeaders.length).setValues([initialHeaders]);
       sheet.getRange(1, 1, 1, initialHeaders.length)
@@ -287,6 +311,15 @@ function appendAuditEvent_(event) {
   };
   appendRecord_(SHEETS.AuditLog, record);
   return record;
+}
+
+/**
+ * appendAuditEvent_は保存行番号を返さないため、log_idで再取得して更新する。
+ */
+function updateAuditEvent_(logId, updates) {
+  var audit = findByKey_(SHEETS.AuditLog, 'log_id', logId);
+  if (!audit || !audit._row) return false;
+  return updateRecord_(SHEETS.AuditLog, audit._row, updates);
 }
 
 // ---------------------------------------------------------------------------

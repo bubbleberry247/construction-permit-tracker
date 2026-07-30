@@ -214,6 +214,8 @@
           <div class="kpi"><span class="muted">MLIT mode</span><strong id="ops-mlit-mode">-</strong></div>
           <div class="kpi"><span class="muted">MLIT 7日超</span><strong id="ops-mlit-stale">-</strong></div>
           <div class="kpi"><span class="muted">MLIT確認待ち差分</span><strong id="ops-mlit-diffs">-</strong></div>
+          <div class="kpi"><span class="muted">送信元</span><strong id="ops-sender">-</strong></div>
+          <div class="kpi"><span class="muted">管理trigger</span><strong id="ops-triggers">-</strong></div>
         </div>
         <div class="grid">
           <div class="card">
@@ -222,6 +224,10 @@
             <div class="field"><label for="mode-reason">変更理由</label><textarea id="mode-reason" maxlength="200"></textarea></div>
             <label><input type="checkbox" id="confirm-incidents" style="width:auto"> 誤宛先・重複・権限逸脱が0件</label><br>
             <label><input type="checkbox" id="confirm-reconciled" style="width:auto"> Gmail・Notifications・AuditLogを照合済み</label>
+            <div class="field">
+              <label><input type="checkbox" id="confirm-low-volume" style="width:auto"> 自然発生が5件未満の低件数例外を申請</label>
+              <textarea id="low-volume-reason" maxlength="300" placeholder="対象が少ない理由とUAT証跡を入力"></textarea>
+            </div>
             <div class="actions"><button type="button" class="primary" id="mode-change-button">modeを変更</button></div>
             <p id="promotion-evidence" class="muted"></p>
           </div>
@@ -675,6 +681,21 @@
             var regenerate = document.createElement('button'); regenerate.className = 'secondary'; regenerate.textContent = '再生成';
             regenerate.addEventListener('click', function(){ regenerateQueue(item.queue_id); }); actionCell.appendChild(regenerate);
           }
+          if (item.status === 'PENDING_RECONCILIATION' &&
+              hasCapability('notifications.reconcile')) {
+            var markSent = document.createElement('button');
+            markSent.className = 'secondary'; markSent.textContent = '送信済み確認';
+            markSent.addEventListener('click', function(){
+              reconcileQueue(item.queue_id, 'CONFIRMED_SENT');
+            });
+            actionCell.appendChild(markSent);
+            var markNotSent = document.createElement('button');
+            markNotSent.className = 'secondary'; markNotSent.textContent = '未送信確認';
+            markNotSent.addEventListener('click', function(){
+              reconcileQueue(item.queue_id, 'CONFIRMED_NOT_SENT');
+            });
+            actionCell.appendChild(markNotSent);
+          }
           tr.appendChild(actionCell); body.appendChild(tr);
         });
       }).catch(function(error){ showToast(error.message, true); });
@@ -718,6 +739,21 @@
     function regenerateQueue(queueId) {
       api('notifications.regenerate', {queueId:queueId}).then(function(){ showToast('候補を再生成しました', false); loadQueues(); })
         .catch(function(error){ showToast(error.message, true); });
+    }
+    function reconcileQueue(queueId, outcome) {
+      var guidance = outcome === 'CONFIRMED_SENT'
+        ? 'Gmail送信済みで宛先・件名・送信時刻を確認した証跡を入力してください。'
+        : 'Gmail送信済みに存在しないことを確認した証跡を入力してください。';
+      var evidence = window.prompt(guidance);
+      if (!evidence) return;
+      api('notifications.reconcile', {
+        queueId: queueId,
+        outcome: outcome,
+        evidenceNote: evidence
+      }).then(function(data) {
+        showToast('照合を確定しました。監査ID: ' + data.auditId, false);
+        loadQueues();
+      }).catch(function(error) { showToast(error.message, true); });
     }
 
     function loadMlitDiffs() {
@@ -819,8 +855,12 @@
           setText('ops-mlit-mode', status.mlit.mode);
           setText('ops-mlit-stale', status.mlit.staleOver7Days);
           setText('ops-mlit-diffs', status.mlit.pendingDiffs);
-          setText('promotion-evidence', '現段階: ' + status.promotionEvidence.businessDays + '営業日 / SENT ' +
-            status.promotionEvidence.sentCount + '件 / 未解決 ' + status.promotionEvidence.unresolvedCount + '件');
+          setText('ops-sender', status.sender && status.sender.valid
+            ? status.sender.senderEmail : '未設定・不一致');
+          setText('ops-triggers', status.managedTriggers ? status.managedTriggers.total : 0);
+          setText('promotion-evidence', '現段階: ' + status.promotionEvidence.businessDays + '平日 / SENT ' +
+            status.promotionEvidence.sentCount + '件 / 未解決 ' + status.promotionEvidence.unresolvedCount +
+            '件 / 低件数例外 ' + (status.promotionEvidence.lowVolumeEligible ? '申請可能' : '対象外'));
           var modeSelect = byId('mode-select'); modeSelect.replaceChildren();
           MODES.forEach(function(mode){ var option = document.createElement('option'); option.value = mode; option.textContent = mode;
             option.selected = mode === status.notificationMode; modeSelect.appendChild(option); });
@@ -840,7 +880,9 @@
       api('operations.setNotificationMode', {
         mode:mode, reason:byId('mode-reason').value.trim(),
         confirmNoIncidents:byId('confirm-incidents').checked,
-        confirmReconciled:byId('confirm-reconciled').checked
+        confirmReconciled:byId('confirm-reconciled').checked,
+        confirmLowVolumeWaiver:byId('confirm-low-volume').checked,
+        lowVolumeWaiverReason:byId('low-volume-reason').value.trim()
       }).then(function(data){ showToast('modeを' + data.mode + 'へ変更しました', false); loadOperations(); })
         .catch(function(error){ showToast(error.message, true); });
     }

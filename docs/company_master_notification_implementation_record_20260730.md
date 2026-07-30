@@ -3,7 +3,7 @@
 作成日: 2026-07-30
 対象branch: `codex/phase0-p1-safety`
 基点commit: `707794a`
-状態: **会社マスタ・MLIT差分・通知連携のローカル実装、自動テスト、127社の正式承認、UAT複製環境でのschema・staging・正本切替再現完了／Web認証UAT・本番反映未実施**
+状態: **会社マスタ・許可/MLIT差分・通知連携の実装、127社の会社正本UAT、許可/監視staging技術UAT、固定deployment v7、隔離復元演習完了／業務レビュー・Web認証UAT・本番反映未実施**
 
 ## 1. 結論
 
@@ -182,11 +182,12 @@ company_id・vendor_no重複0、Permit/MLIT孤立参照0を再現した。
 
 2026-07-30 最新実行:
 
-- Phase 0送信安全テスト: 30/30 PASS
-- 認証・マスタ・queue・移行・構文テスト: 26/26 PASS
+- Phase 0送信安全テスト: 31/31 PASS
+- 認証・マスタ・queue・移行・構文テスト: 34/34 PASS
 - MLIT同期・差分・期限切れ回帰テスト: 13/13 PASS
-- Python全回帰テスト: 404/404 PASS
-- 今回の実行合計: 473/473 PASS
+- Python全回帰テスト: 415/415 PASS
+- 数値化できるテスト合計: 493/493 PASS
+- 運用統制テスト: PASS
 - `git diff --check`: error 0
 - 全Apps Scriptファイルと`index.html`内JavaScriptの構文解析: PASS
 - clasp認識対象に新規`.gs`ファイルを含むこと: 確認済み
@@ -244,6 +245,15 @@ company_id・vendor_no重複0、Permit/MLIT孤立参照0を再現した。
 詳細証跡:
 
 `docs/phase1_uat_master_migration_record_20260730.md`
+
+会社マスタ移行後、許可候補50件と監視対象131社も保護stagingへ取り込んだ。
+許可候補PENDING 50件、監視対象PENDING 64社・AUTO_APPROVED 67社であり、
+dry-runは未判断を理由に停止したため、Permits正本と監視状態は変更していない。
+
+最新固定UAT deployment:
+
+- `AKfycbwYyjjQw4ZYag37JSOexxGJHFwZG78a69-Dcmi2DcT7XoHoOAQyGTCrR5EgWbpVMm9Y2w @7`
+- 技術証跡: `docs/phase2_4_permit_notification_uat_record_20260730.md`
 
 固定UAT Web deploymentは起動したが、`GOOGLE_CLIENT_ID`未設定を
 fail-closed表示するため、ログイン後の画面・権限・攻撃テストは未開始。
@@ -335,9 +345,14 @@ UserAccess:
 - UAT用Apps Script project／複製Sheetの作成。**完了**
 - UATでのschema、正式承認済みstagingロード、dry-run、バックアップ、
   Companies正本切替、整合性再検証。**完了**
+- 許可正本・監視対象の照合、レビュー台帳、UAT staging取込、
+  未承認時dry-run停止、監査ログ突合。**完了**
+- 移行後チェックポイント作成、別Google Sheetsへの隔離復元、
+  Companies 131・Permits 19・MLIT 59等の件数突合。**完了**
 - Google OAuth Web client IDの作成・設定。
 - 3アカウントの実ブラウザUAT。
-- 本番バックアップ先の設定と復旧実演。
+- UAT復旧演習。**完了**
+- 本番バックアップ先の設定と本番相当復旧演習。
 - 本番push／deployment／公開範囲変更。
 - 5営業日のマスタ更新運用。
 - INTERNAL_TEST、MANUAL_PILOT以降の実運用。
