@@ -3,7 +3,7 @@
 作成日: 2026-07-30
 対象branch: `codex/phase0-p1-safety`
 基点commit: `707794a`
-状態: **会社マスタ・MLIT差分・通知連携のローカル実装、自動テスト、127社の正式承認・確定staging・正本候補dry-run完了／UAT・本番反映未実施**
+状態: **会社マスタ・MLIT差分・通知連携のローカル実装、自動テスト、127社の正式承認、UAT複製環境でのschema・staging・正本切替再現完了／Web認証UAT・本番反映未実施**
 
 ## 1. 結論
 
@@ -12,10 +12,11 @@
 
 ただし次の理由により、客先公開・Companies正本化・外部送信はまだ実行していない。
 
-- 本番の`GOOGLE_CLIENT_ID`が未設定。
+- UAT・本番の`GOOGLE_CLIENT_ID`が未設定。
 - 本番`UserAccess`は旧`admin`の3行で、`canSendExternal`列もまだない。
-- 127社は正式承認済みだが、確定stagingをUAT複製環境へロードしていない。
-- 設計で必須とした複製スプレッドシート・別deploymentでの攻撃テスト／UATが未実施。
+- 127社は正式承認済みで、確定stagingと正本切替はUAT複製環境で再現済み。
+- UATのGoogle client IDと3アカウントの実ログインが未準備のため、
+  認証攻撃テストと画面UATは未実施。
 - `INTERNAL_TEST`以降の実送信、10営業日の段階昇格条件は時間経過と運用承認が必要。
 
 本番の既存deployment v24、公開範囲`MYSELF`、トリガー0件、外部送信0件は変更していない。
@@ -211,7 +212,43 @@ company_id・vendor_no重複0、Permit/MLIT孤立参照0を再現した。
 - 数式インジェクション、XSS用HTML挿入、メールヘッダー注入を防止。
 - Gmail成功後のログ失敗時に自動再送しない。
 
-## 5. UAT開始前の必須設定
+## 5. UAT移行再現の実施結果
+
+2026-07-30、正式承認済みstagingを既存の隔離テスト環境へロードし、
+本番とは別のApps Script project／固定deploymentで正本切替まで再現した。
+
+- UAT Sheet:
+  `1Hzr72GZgxtLRr1bL_SUqPSjoKEDx521b6M1IxV_y-EQ`
+- UAT Apps Script:
+  `1urr5VGVUkKXO6xV_SrSQwT3l4R1hfPH76dSdReTxp_QsszzK_5PwaMFH`
+- UAT deployment:
+  `AKfycbxVWFJ04Bccbzh9rExJ4aoaF9e9qG-7S4bO0qgPIkJHzneEVpQKjCWPgfQa6xUdwy2XFw @2`
+- UATアクセス: `MYSELF`
+- migration結果:
+  - Companies 131社
+  - ACTIVE 128社
+  - INACTIVE 3社
+  - vendor numberあり125社
+  - company_id・vendor_no重複0
+  - Permit/MLIT孤立company_id 0
+  - staging 127行
+  - 旧Companies archive 1シート
+- UATバックアップ: `COMMITTED`
+- `ENABLE_SEND=FALSE`
+- notification mode `OFF`
+- MLIT sync mode `OFF`
+- trigger 0件
+- 一時UATランナーは除去済み
+- UAT remote 25ファイルはbranch `src`と全件一致
+
+詳細証跡:
+
+`docs/phase1_uat_master_migration_record_20260730.md`
+
+固定UAT Web deploymentは起動したが、`GOOGLE_CLIENT_ID`未設定を
+fail-closed表示するため、ログイン後の画面・権限・攻撃テストは未開始。
+
+## 6. Web UAT開始前の必須設定
 
 本番ではなく、複製スプレッドシートと別Apps Script projectで先に実施する。
 
@@ -241,7 +278,7 @@ UserAccess:
 - mutation時のconfirmationは`APPLY_SCHEMA_V2`。
 - initial role、company backfill、sheet protectionを適用。
 
-## 6. 会社マスタ移行手順
+## 7. 会社マスタ移行手順
 
 1. `master_import_staging.csv`の13件を照合する。
 2. `system_only.csv`の4件を照合する。
@@ -265,7 +302,7 @@ UserAccess:
 
 確認文字列は現在の原本hashにだけ有効である。原本が変わった場合はdry-runからやり直す。
 
-## 7. 本番切替ゲート
+## 8. 本番切替ゲート
 
 次の順序を変更しない。
 
@@ -285,7 +322,7 @@ UserAccess:
 14. 連絡先を外部手段で再確認した5社だけ`MANUAL_PILOT`。
 15. 各段階10営業日・5送信・事故0・未解決0・突合100%で1段階ずつ昇格。
 
-## 8. ロールバック
+## 9. ロールバック
 
 - コード: v24を含む前deploymentへ戻す。
 - 送信: まず管理画面でmodeを`OFF`、次にmanaged triggerを停止、最後にログ保全。
@@ -293,12 +330,13 @@ UserAccess:
 - 個別変更: 現在versionが一致する場合だけ`companies.revertChange`を実行。
 - Gmail成功・ログ不明: 再送せず`PENDING_RECONCILIATION`として送信済みと照合。
 
-## 9. 未完了事項
+## 10. 未完了事項
 
-- UAT用Apps Script project／複製Sheetの作成。
+- UAT用Apps Script project／複製Sheetの作成。**完了**
+- UATでのschema、正式承認済みstagingロード、dry-run、バックアップ、
+  Companies正本切替、整合性再検証。**完了**
 - Google OAuth Web client IDの作成・設定。
 - 3アカウントの実ブラウザUAT。
-- 正式承認済みstaging CSVのUAT複製環境へのロードとdry-run再現。
 - 本番バックアップ先の設定と復旧実演。
 - 本番push／deployment／公開範囲変更。
 - 5営業日のマスタ更新運用。
