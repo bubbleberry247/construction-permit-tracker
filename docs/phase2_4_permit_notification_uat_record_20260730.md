@@ -5,7 +5,7 @@
 対象branch: `codex/phase0-p1-safety`
 
 対象環境: 本番とは別のApps Script／複製Google Sheets
-判定: **技術UAT・復旧演習 PASS／業務承認・Google OAuth・3アカウントUAT・本番反映は未実施**
+判定: **技術UAT・復旧演習・技術管理者OAuth PASS／業務承認・客先2アカウントUAT・本番反映は未実施**
 
 ## 1. 今回完了した範囲
 
@@ -23,6 +23,8 @@
 - メール送信元をScript Propertiesと実行アカウントで照合する中央送信ゲート。
 - レビュー台帳から承認済みstaging CSVを生成する検証ツール。
 - UAT固定deployment v7の作成と、OAuth未設定時のfail-closed表示。
+- GISの`origin_mismatch`を根本原因まで確認し、Authorization Code + PKCEへ変更。
+- 固定deployment v8で技術管理者Googleログインと運用状態表示を確認。
 - 移行後の明示チェックポイント作成と、別Google Sheetsへの復元・件数突合。
 
 本番Apps Script、本番スプレッドシート、本番deployment、公開範囲、
@@ -135,14 +137,14 @@ python scripts\export_reviewed_permit_staging.py `
 |---|---|
 | Spreadsheet ID | `1Hzr72GZgxtLRr1bL_SUqPSjoKEDx521b6M1IxV_y-EQ` |
 | Apps Script ID | `1urr5VGVUkKXO6xV_SrSQwT3l4R1hfPH76dSdReTxp_QsszzK_5PwaMFH` |
-| 固定deployment | `AKfycbwYyjjQw4ZYag37JSOexxGJHFwZG78a69-Dcmi2DcT7XoHoOAQyGTCrR5EgWbpVMm9Y2w @7` |
+| 固定deployment | `AKfycbwYyjjQw4ZYag37JSOexxGJHFwZG78a69-Dcmi2DcT7XoHoOAQyGTCrR5EgWbpVMm9Y2w @8` |
 | 実行者 | deployment所有者 |
-| アクセス | Googleログイン必須、匿名不可 |
+| アクセス | Web endpoint到達可。業務APIはGoogle OIDC + UserAccess必須 |
 | `ENABLE_SEND` | `FALSE` |
 | notification mode | `OFF` |
 | MLIT sync mode | `OFF` |
 | project trigger | 0件 |
-| Google client ID | 未設定 |
+| Google OAuth | Authorization Code + PKCE設定済み |
 
 固定Web URL:
 
@@ -151,9 +153,15 @@ python scripts\export_reviewed_permit_staging.py `
 画面確認結果:
 
 - タイトルは「建設業許可証管理システム」。
-- `GOOGLE_CLIENT_ID`未設定を検知。
-- 「Google client IDが未設定です。運用管理者へ連絡してください。」を表示。
-- tokenなしで会社・通知APIへ進まず、fail-closed。
+- `kalimistk@gmail.com`でGoogle OAuthを完了。
+- サーバー側`UserAccess`から`technical_admin`を決定。
+- 会社一覧131社を表示。
+- notification mode `OFF`、MLIT mode `OFF`、managed trigger 0件。
+- 送信準備完了0社、要設定131社、送信元は未設定・不一致。
+
+認証方式と証跡の詳細:
+
+`docs/phase0c_oauth_uat_record_20260730.md`
 
 ## 6. UAT staging取込証跡
 
@@ -259,10 +267,12 @@ checkpointを元UATへ上書きせず、別ファイルへコピーして復元�
 | UserAccess | 3 |
 | NotificationQueue | 0 |
 
-コード側は前deployment v5、復旧機能初版v6、監査fail-closed修正版v7を保持した。
-v5と最終v7を起動し、いずれも`GOOGLE_CLIENT_ID`未設定で
-fail-closedになることを確認した。
-最終UAT HEADから一時ランナーを削除し、26ファイルだけであることを確認した。
+コード側は前deployment v5、復旧機能初版v6、監査fail-closed修正版v7、
+OAuth Code + PKCE版v8を保持した。
+v5と当時のv7を起動し、いずれも`GOOGLE_CLIENT_ID`未設定で
+fail-closedになることを確認した。Phase 2-4チェックポイントでは
+一時ランナーを削除して26ファイル、OAuth追加後のv8では
+`OAuthLogin.gs`を含む27ファイルであることを確認した。
 
 ## 8. 自動テスト
 
@@ -272,10 +282,10 @@ fail-closedになることを確認した。
 |---|---:|
 | Python回帰 | 415/415 PASS |
 | Phase 0送信安全 | 31/31 PASS |
-| 認証・会社・通知・移行 | 34/34 PASS |
+| 認証・会社・通知・移行 | 38/38 PASS |
 | MLIT同期・期限差分 | 13/13 PASS |
 | 運用統制 | PASS |
-| 数値化できるテスト合計 | 493/493 PASS |
+| 数値化できるテスト合計 | 497/497 PASS |
 
 主な追加回帰:
 
@@ -295,8 +305,8 @@ fail-closedになることを確認した。
 3. 承認済み台帳からCSVを生成し、別Drive file IDとhashでUATを再取込。
 4. 最新UATチェックポイント後の許可正本・監視対象apply。
 5. apply後に今回と同じ隔離方式で復元結果を再突合。
-6. UAT用Google OAuth Web client IDの作成・Script Property設定。
-7. `m-fujita`、`kanri.tic`、`kalimistk`の実アカウントUAT。
+6. ~~UAT用Google OAuth Web clientの作成・Script Property設定。~~ **完了**
+7. `m-fujita`、`kanri.tic`のGoogle identity準備と客先2role UAT。
 8. PC・スマートフォンの検索、更新、競合、復帰、権限拒否確認。
 9. 本番変更についての明示承認。
 10. 本番反映後も`ENABLE_SEND=FALSE`、mode`OFF`、trigger 0から開始。

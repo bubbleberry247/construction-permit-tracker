@@ -6,7 +6,7 @@
 - 対象: 正式承認済み会社マスタ127行のUAT再現
 - 判定: **PASS**
 - 本番反映: **未実施**
-- UAT Web認証: **Google OAuth Web client ID未設定のため未開始**
+- UAT Web認証: **後続の固定deployment v8で技術管理者PASS**
 - 外部送信: 0件
 - UATトリガー: 0件
 - 本番トリガー: 0件を維持
@@ -216,25 +216,25 @@ UAT移行・証跡更新後にローカル全テストを再実行した。
 
 ## 9. Web UATの現在地
 
-固定UAT deploymentは起動し、建設業許可証管理システムの初期画面を表示した。
-ただし画面には次のfail-closed表示が出る。
+本記録作成後、GIS直接実行で発生した`origin_mismatch`を
+Authorization Code + PKCEへ設計変更し、固定UAT deployment v8へ反映した。
 
-`Google client IDが未設定です。運用管理者へ連絡してください。`
+- `kalimistk@gmail.com`のGoogleログイン: PASS
+- サーバー決定role: `technical_admin`
+- 会社一覧: 131社
+- notification mode: `OFF`
+- MLIT mode: `OFF`
+- managed trigger: 0件
 
-このため、以下は未実施でありPASS扱いにしない。
+次は未実施でありPASS扱いにしない。
 
-- Google ID tokenによる実ログイン
-- `m-fujita`、`kanri.tic`、`kalimistk`の3アカウント権限別UAT
-- role偽装などの実ブラウザ攻撃テスト
+- `m-fujita`、`kanri.tic`のGoogle identity準備
+- `master_editor`、`operations_admin`の実ブラウザ権限別UAT
 - PC／スマートフォンの会社検索・更新・競合復帰
 
-次の開始条件:
+詳細:
 
-1. UAT用Google OAuth Web client IDを作成する。
-2. UAT Web appの実originをAuthorized JavaScript originsへ登録する。
-3. UAT Apps ScriptのScript Property `GOOGLE_CLIENT_ID`へ設定する。
-4. 固定UAT deploymentを更新する。
-5. 3アカウントでサインインできる状態を用意する。
+`docs/phase0c_oauth_uat_record_20260730.md`
 
 ## 10. 本番非変更確認
 

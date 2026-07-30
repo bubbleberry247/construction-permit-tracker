@@ -3,7 +3,7 @@
 作成日: 2026-07-30
 対象branch: `codex/phase0-p1-safety`
 基点commit: `707794a`
-状態: **会社マスタ・許可/MLIT差分・通知連携の実装、127社の会社正本UAT、許可/監視staging技術UAT、固定deployment v7、隔離復元演習完了／業務レビュー・Web認証UAT・本番反映未実施**
+状態: **会社マスタ・許可/MLIT差分・通知連携の実装、127社の会社正本UAT、許可/監視staging技術UAT、固定deployment v8、隔離復元演習、技術管理者Web認証UAT完了／業務レビュー・客先2アカウントUAT・本番反映未実施**
 
 ## 1. 結論
 
@@ -12,11 +12,11 @@
 
 ただし次の理由により、客先公開・Companies正本化・外部送信はまだ実行していない。
 
-- UAT・本番の`GOOGLE_CLIENT_ID`が未設定。
+- UATのGoogle OAuthは設定済み。本番OAuthは未設定・未変更。
 - 本番`UserAccess`は旧`admin`の3行で、`canSendExternal`列もまだない。
 - 127社は正式承認済みで、確定stagingと正本切替はUAT複製環境で再現済み。
-- UATのGoogle client IDと3アカウントの実ログインが未準備のため、
-  認証攻撃テストと画面UATは未実施。
+- 技術管理者の実ログインはPASS。客先2メールがGoogle identityへ
+  関連付けられておらず、`master_editor`と`operations_admin`の画面UATは未実施。
 - `INTERNAL_TEST`以降の実送信、10営業日の段階昇格条件は時間経過と運用承認が必要。
 
 本番の既存deployment v24、公開範囲`MYSELF`、トリガー0件、外部送信0件は変更していない。
@@ -26,7 +26,10 @@
 ### 認証・権限
 
 - 公開トップレベル関数を`doGet`と`apiDispatch`だけに制限。
-- Google Identity ServicesのID tokenをブラウザメモリだけで保持。
+- Apps Script sandbox originでGISを直接実行せず、
+  Google OIDC Authorization Code + PKCEを使用。
+- client secretとPKCE verifierはサーバー側だけで使用。
+- ID tokenを一回限りのpollで渡し、ブラウザメモリだけで保持。
 - サーバーで`aud`、`iss`、`exp`、`email_verified`を検証。
 - email、role、`canSendExternal`を`UserAccess`から決定。
 - token検証失敗、未登録、inactive、権限不足はfail-closed。
@@ -183,10 +186,10 @@ company_id・vendor_no重複0、Permit/MLIT孤立参照0を再現した。
 2026-07-30 最新実行:
 
 - Phase 0送信安全テスト: 31/31 PASS
-- 認証・マスタ・queue・移行・構文テスト: 34/34 PASS
+- 認証・マスタ・queue・移行・構文テスト: 38/38 PASS
 - MLIT同期・差分・期限切れ回帰テスト: 13/13 PASS
 - Python全回帰テスト: 415/415 PASS
-- 数値化できるテスト合計: 493/493 PASS
+- 数値化できるテスト合計: 497/497 PASS
 - 運用統制テスト: PASS
 - `git diff --check`: error 0
 - 全Apps Scriptファイルと`index.html`内JavaScriptの構文解析: PASS
@@ -252,11 +255,12 @@ dry-runは未判断を理由に停止したため、Permits正本と監視状態
 
 最新固定UAT deployment:
 
-- `AKfycbwYyjjQw4ZYag37JSOexxGJHFwZG78a69-Dcmi2DcT7XoHoOAQyGTCrR5EgWbpVMm9Y2w @7`
+- `AKfycbwYyjjQw4ZYag37JSOexxGJHFwZG78a69-Dcmi2DcT7XoHoOAQyGTCrR5EgWbpVMm9Y2w @8`
 - 技術証跡: `docs/phase2_4_permit_notification_uat_record_20260730.md`
 
-固定UAT Web deploymentは起動したが、`GOOGLE_CLIENT_ID`未設定を
-fail-closed表示するため、ログイン後の画面・権限・攻撃テストは未開始。
+固定UAT Web deployment v8で`kalimistk@gmail.com`のGoogleログイン、
+`technical_admin`決定、会社一覧131社、運用状態表示を確認した。
+認証証跡は`docs/phase0c_oauth_uat_record_20260730.md`に記録した。
 
 ## 6. Web UAT開始前の必須設定
 
@@ -265,6 +269,8 @@ fail-closed表示するため、ログイン後の画面・権限・攻撃テス
 Script Properties:
 
 - `GOOGLE_CLIENT_ID`: UAT用Google OAuth Web client ID
+- `GOOGLE_CLIENT_SECRET`: UAT用server-only secret
+- `GOOGLE_OAUTH_REDIRECT_URI`: 固定UAT deploymentの`/exec`
 - `ENABLE_SEND`: `FALSE`
 - `NOTIFICATION_MODE`: `OFF`
 - `INTERNAL_TEST_RECIPIENTS`: 内部テスト許可宛先
@@ -273,8 +279,9 @@ Script Properties:
 
 Google OAuth client:
 
-- UAT Webアプリの実originをAuthorized JavaScript originsへ登録。
-- ID tokenのaudienceと`GOOGLE_CLIENT_ID`を一致させる。
+- Authorized JavaScript originsは登録しない。
+- 固定UAT deploymentの`/exec`だけをAuthorized redirect URIへ登録。
+- tokenのaudienceと`GOOGLE_CLIENT_ID`を一致させる。
 
 UserAccess:
 
@@ -349,8 +356,9 @@ UserAccess:
   未承認時dry-run停止、監査ログ突合。**完了**
 - 移行後チェックポイント作成、別Google Sheetsへの隔離復元、
   Companies 131・Permits 19・MLIT 59等の件数突合。**完了**
-- Google OAuth Web client IDの作成・設定。
-- 3アカウントの実ブラウザUAT。
+- Google OAuth Web clientの作成・設定。**完了**
+- `kalimistk@gmail.com`の実ブラウザUAT。**完了**
+- `m-fujita`、`kanri.tic`のGoogle identity準備と権限別UAT。
 - UAT復旧演習。**完了**
 - 本番バックアップ先の設定と本番相当復旧演習。
 - 本番push／deployment／公開範囲変更。
