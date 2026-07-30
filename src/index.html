@@ -141,6 +141,7 @@
       <nav>
         <button type="button" data-screen="companies" class="active">会社マスタ</button>
         <button type="button" data-screen="notifications">通知確認</button>
+        <button type="button" data-screen="mlit" id="nav-mlit">MLIT確認</button>
         <button type="button" data-screen="operations" id="nav-operations">運用管理</button>
       </nav>
       <div id="user-label"></div>
@@ -185,12 +186,34 @@
         </div>
       </section>
 
+      <section id="screen-mlit" class="hidden">
+        <div class="toolbar">
+          <select id="mlit-diff-status" style="max-width:220px">
+            <option value="PENDING_REVIEW">確認待ち</option>
+            <option value="DISMISSED">却下済み</option>
+            <option value="APPLIED">反映済み</option>
+            <option value="">全状態</option>
+          </select>
+          <button type="button" class="secondary" id="mlit-diff-refresh-button">再読込</button>
+          <span id="mlit-mode-label" class="badge"></span>
+        </div>
+        <div class="card table-wrap">
+          <table>
+            <thead><tr><th>会社</th><th>許可番号</th><th>承認済み期限</th><th>MLIT観測期限</th><th>成功確認</th><th>状態</th><th>操作</th></tr></thead>
+            <tbody id="mlit-diff-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section id="screen-operations" class="hidden">
         <div class="kpis">
           <div class="kpi"><span class="muted">送信mode</span><strong id="ops-mode">-</strong></div>
           <div class="kpi"><span class="muted">送信準備完了会社</span><strong id="ops-ready">-</strong></div>
           <div class="kpi"><span class="muted">要設定会社</span><strong id="ops-needs-setup">-</strong></div>
           <div class="kpi"><span class="muted">残り受信者quota</span><strong id="ops-quota">-</strong></div>
+          <div class="kpi"><span class="muted">MLIT mode</span><strong id="ops-mlit-mode">-</strong></div>
+          <div class="kpi"><span class="muted">MLIT 7日超</span><strong id="ops-mlit-stale">-</strong></div>
+          <div class="kpi"><span class="muted">MLIT確認待ち差分</span><strong id="ops-mlit-diffs">-</strong></div>
         </div>
         <div class="grid">
           <div class="card">
@@ -201,6 +224,13 @@
             <label><input type="checkbox" id="confirm-reconciled" style="width:auto"> Gmail・Notifications・AuditLogを照合済み</label>
             <div class="actions"><button type="button" class="primary" id="mode-change-button">modeを変更</button></div>
             <p id="promotion-evidence" class="muted"></p>
+          </div>
+          <div class="card" id="mlit-mode-admin">
+            <h2>MLIT確認mode</h2>
+            <div class="field"><label for="mlit-mode-select">次のmode</label><select id="mlit-mode-select"></select></div>
+            <div class="field"><label for="mlit-mode-reason">変更理由</label><textarea id="mlit-mode-reason" maxlength="200"></textarea></div>
+            <div class="actions"><button type="button" class="primary" id="mlit-mode-change-button">MLIT modeを変更</button></div>
+            <p class="muted">OFF → SHADOW → MANUAL_APPLYの順で昇格します。</p>
           </div>
           <div class="card">
             <h2>schema移行</h2>
@@ -227,6 +257,7 @@
       <div class="grid">
         <div class="field"><label>会社名（変更不可）</label><div id="field-company-name" class="readonly"></div></div>
         <div class="field"><label>業者番号（変更不可）</label><div id="field-vendor-no" class="readonly"></div></div>
+        <div class="field"><label>許可管理対象</label><div id="field-permit-monitoring" class="readonly"></div></div>
         <div class="field"><label for="field-representative">代表者名</label><input id="field-representative" maxlength="100"></div>
         <div class="field"><label for="field-contact-person">担当者名</label><input id="field-contact-person" maxlength="100"></div>
         <div class="field"><label for="field-contact-email">Toメール</label><input id="field-contact-email" type="email" maxlength="254"></div>
@@ -249,6 +280,16 @@
         <div class="field"><label for="field-reason-note">理由補足（OTHERのみ必須）</label><input id="field-reason-note" maxlength="200"></div>
       </div>
       <div id="company-save-result" class="muted"></div>
+      <div class="actions">
+        <button type="button" class="secondary hidden" id="company-monitoring-button">許可管理対象を変更</button>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>許可情報・MLIT確認状態</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>許可番号</th><th>承認済み期限</th><th>MLIT観測期限</th><th>最終成功確認</th><th>状態</th><th>操作</th></tr></thead>
+          <tbody id="company-permits-body"></tbody>
+        </table></div>
+      </div>
       <div class="actions">
         <button type="button" class="secondary" data-close-dialog="company-dialog">キャンセル</button>
         <button type="button" class="primary" id="company-review-button">変更差分を確認</button>
@@ -288,10 +329,12 @@
     var AUTH_TOKEN = '';
     var CURRENT_USER = null;
     var CURRENT_COMPANY = null;
+    var CURRENT_COMPANY_PERMITS = [];
     var PENDING_COMPANY_CHANGES = null;
     var CURRENT_QUEUE_PREVIEW = [];
     var ACTIVE_USERS = [];
     var MODES = ['OFF','INTERNAL_TEST','MANUAL_PILOT','MANUAL_ALL','AUTO_LOW_PILOT','AUTO_LOW_ALL','AUTO_STANDARD_ALL','AUTO_ALL'];
+    var MLIT_MODES = ['OFF','SHADOW','MANUAL_APPLY'];
 
     function byId(id) { return document.getElementById(id); }
     function setText(id, value) { byId(id).textContent = value === null || value === undefined ? '' : String(value); }
@@ -343,6 +386,7 @@
         byId('login-view').classList.add('hidden');
         byId('app-view').classList.remove('hidden');
         setText('user-label', user.displayName + '\n' + user.email);
+        byId('nav-mlit').classList.toggle('hidden', !hasCapability('mlit.read'));
         byId('nav-operations').classList.toggle('hidden', !hasCapability('operations.read'));
         loadCompanies();
       }).catch(function(error) {
@@ -374,7 +418,7 @@
       setText('login-status', 'ログアウトしました。再度ログインできます。');
     }
     function showScreen(name) {
-      ['companies','notifications','operations'].forEach(function(screen) {
+      ['companies','notifications','mlit','operations'].forEach(function(screen) {
         byId('screen-' + screen).classList.toggle('hidden', screen !== name);
       });
       document.querySelectorAll('nav button[data-screen]').forEach(function(button) {
@@ -382,6 +426,7 @@
       });
       if (name === 'companies') loadCompanies();
       if (name === 'notifications') loadQueues();
+      if (name === 'mlit') loadMlitDiffs();
       if (name === 'operations') loadOperations();
     }
 
@@ -437,9 +482,62 @@
         option.selected = user.email === selected; select.appendChild(option);
       });
     }
+    function renderCompanyPermits(permits) {
+      var body = byId('company-permits-body'); body.replaceChildren();
+      (permits || []).forEach(function(permit) {
+        var tr = document.createElement('tr');
+        tr.appendChild(cell(permit.permit_number || ''));
+        tr.appendChild(cell(permit.expiry_date || '未設定'));
+        tr.appendChild(cell(permit.observed_expiry_date || '未確認'));
+        tr.appendChild(cell(permit.mlit && permit.mlit.lastSuccessAt || '成功確認なし'));
+        var stateCell = document.createElement('td');
+        var stateCode = permit.diff_status === 'PENDING_REVIEW'
+          ? 'STALE'
+          : permit.mlit && permit.mlit.sendFresh ? 'READY' : 'BLOCKED';
+        stateCell.appendChild(badge(
+          permit.diff_status === 'PENDING_REVIEW'
+            ? '期限差分あり'
+            : permit.mlit && permit.mlit.label || 'MLIT未確認',
+          stateCode
+        ));
+        tr.appendChild(stateCell);
+        var actionCell = document.createElement('td');
+        if (permit.permit_id && hasCapability('mlit.request_refresh')) {
+          var refresh = document.createElement('button');
+          refresh.type = 'button'; refresh.className = 'secondary';
+          refresh.textContent = 'MLITを再確認';
+          refresh.addEventListener('click', function() {
+            requestMlitRefresh(permit.permit_id, refresh);
+          });
+          actionCell.appendChild(refresh);
+        }
+        tr.appendChild(actionCell);
+        body.appendChild(tr);
+      });
+      if (!(permits || []).length) {
+        var empty = document.createElement('tr');
+        var emptyCell = cell('許可情報が登録されていません');
+        emptyCell.colSpan = 6; empty.appendChild(emptyCell); body.appendChild(empty);
+      }
+    }
+    function requestMlitRefresh(permitId, button) {
+      setBusy(button, true);
+      api('mlit.requestRefresh', {
+        companyId: '',
+        permitId: permitId,
+        reason: '担当者による画面確認'
+      }).then(function(data) {
+        showToast(data.message + ' 監査ID: ' + data.auditId, false);
+      }).catch(function(error) {
+        showToast(error.message, true);
+      }).finally(function() {
+        setBusy(button, false);
+      });
+    }
     function openCompany(companyId) {
       api('companies.get', {companyId:companyId}).then(function(result) {
         CURRENT_COMPANY = result.company;
+        CURRENT_COMPANY_PERMITS = result.permits || [];
         ACTIVE_USERS = (result.internalOwners || []).map(function(owner) {
           return {email:owner.email, displayName:owner.displayName, active:true};
         });
@@ -447,6 +545,17 @@
         setText('company-dialog-id', CURRENT_COMPANY.company_id + ' / version ' + CURRENT_COMPANY.data_version);
         setText('field-company-name', CURRENT_COMPANY.company_name_normalized || CURRENT_COMPANY.company_name_raw);
         setText('field-vendor-no', CURRENT_COMPANY.vendor_no || '未設定');
+        setText(
+          'field-permit-monitoring',
+          CURRENT_COMPANY.permit_monitoring_enabled ? '対象' : '対象外'
+        );
+        byId('company-monitoring-button').classList.toggle(
+          'hidden', !hasCapability('companies.manage_monitoring')
+        );
+        byId('company-monitoring-button').textContent =
+          CURRENT_COMPANY.permit_monitoring_enabled
+            ? '許可管理対象から外す'
+            : '許可管理対象にする';
         byId('field-representative').value = CURRENT_COMPANY.representative_name || '';
         byId('field-contact-person').value = CURRENT_COMPANY.contact_person || '';
         byId('field-contact-email').value = CURRENT_COMPANY.contact_email || '';
@@ -457,8 +566,39 @@
         byId('field-reason').value = 'CUSTOMER_REQUEST';
         byId('field-reason-note').value = '';
         setText('company-save-result', '');
+        renderCompanyPermits(CURRENT_COMPANY_PERMITS);
         byId('company-dialog').showModal();
       }).catch(function(error) { showToast(error.message, true); });
+    }
+    function toggleCompanyMonitoring() {
+      if (!CURRENT_COMPANY || !hasCapability('companies.manage_monitoring')) return;
+      var enabled = !CURRENT_COMPANY.permit_monitoring_enabled;
+      var reason = window.prompt(
+        (enabled ? '許可管理対象にします。' : '許可管理対象から外します。') +
+        '変更理由を入力してください。'
+      );
+      if (!reason) return;
+      var button = byId('company-monitoring-button'); setBusy(button, true);
+      api('companies.updateMonitoring', {
+        companyId: CURRENT_COMPANY.company_id,
+        dataVersion: CURRENT_COMPANY.data_version,
+        enabled: enabled,
+        reason: reason
+      }).then(function(data) {
+        CURRENT_COMPANY = data.company;
+        setText('field-permit-monitoring', enabled ? '対象' : '対象外');
+        button.textContent = enabled ? '許可管理対象から外す' : '許可管理対象にする';
+        showToast(
+          '許可管理対象を更新しました。MLIT確認予約 ' +
+          data.queuedPermits + '件 / 監査ID ' + data.auditId,
+          false
+        );
+        loadCompanies();
+      }).catch(function(error) {
+        showToast(error.message, true);
+      }).finally(function() {
+        setBusy(button, false);
+      });
     }
     function collectCompanyChanges() {
       var values = {
@@ -580,6 +720,94 @@
         .catch(function(error){ showToast(error.message, true); });
     }
 
+    function loadMlitDiffs() {
+      if (!hasCapability('mlit.read')) { showScreen('companies'); return; }
+      var body = byId('mlit-diff-table-body'); body.replaceChildren();
+      var loading = document.createElement('tr'); var loadingCell = cell('読み込み中…');
+      loadingCell.colSpan = 7; loading.appendChild(loadingCell); body.appendChild(loading);
+      api('mlit.listDiffs', {
+        status: byId('mlit-diff-status').value,
+        limit: 200
+      }).then(function(data) {
+        body.replaceChildren(); setText('mlit-mode-label', data.mode);
+        data.items.forEach(function(item) {
+          var tr = document.createElement('tr');
+          tr.appendChild(cell(item.companyName));
+          tr.appendChild(cell(item.permitNumber));
+          tr.appendChild(cell(item.approvedExpiryDate || '未設定'));
+          tr.appendChild(cell(item.observedExpiryDate || '未取得'));
+          tr.appendChild(cell(item.lastSuccessAt || '成功確認なし'));
+          var stateCell = document.createElement('td');
+          stateCell.appendChild(badge(
+            item.diffStatus,
+            item.diffStatus === 'PENDING_REVIEW' ? 'STALE' : 'READY'
+          ));
+          if (item.diffType) {
+            stateCell.appendChild(document.createElement('br'));
+            stateCell.appendChild(document.createTextNode(item.diffType));
+          }
+          if (item.diffRiskFlags) {
+            stateCell.appendChild(document.createElement('br'));
+            var risk = document.createElement('span');
+            risk.className = 'error';
+            risk.textContent = item.diffRiskFlags;
+            stateCell.appendChild(risk);
+          }
+          tr.appendChild(stateCell);
+          var actionCell = document.createElement('td');
+          var nonApplicableTypes = ['NOT_FOUND', 'AMBIGUOUS_MATCH', 'IDENTITY_MISMATCH'];
+          if (item.diffStatus === 'PENDING_REVIEW' &&
+              item.observedExpiryDate &&
+              nonApplicableTypes.indexOf(item.diffType) < 0 &&
+              hasCapability('mlit.apply_diff')) {
+            var apply = document.createElement('button');
+            apply.type = 'button'; apply.className = 'primary'; apply.textContent = '反映';
+            apply.addEventListener('click', function() { applyMlitDiff(item); });
+            actionCell.appendChild(apply);
+            var dismiss = document.createElement('button');
+            dismiss.type = 'button'; dismiss.className = 'secondary'; dismiss.textContent = '却下';
+            dismiss.addEventListener('click', function() { dismissMlitDiff(item); });
+            actionCell.appendChild(dismiss);
+          }
+          tr.appendChild(actionCell); body.appendChild(tr);
+        });
+        if (!data.items.length) {
+          var empty = document.createElement('tr'); var emptyCell = cell('該当するMLIT差分はありません');
+          emptyCell.colSpan = 7; empty.appendChild(emptyCell); body.appendChild(empty);
+        }
+      }).catch(function(error) {
+        body.replaceChildren(); var row = document.createElement('tr'); var errorCell = cell(error.message);
+        errorCell.colSpan = 7; errorCell.className = 'error'; row.appendChild(errorCell); body.appendChild(row);
+      });
+    }
+    function applyMlitDiff(item) {
+      var reason = window.prompt(
+        '承認済み期限 ' + item.approvedExpiryDate +
+        ' を MLIT観測期限 ' + item.observedExpiryDate +
+        ' へ変更します。反映理由を入力してください。'
+      );
+      if (!reason) return;
+      api('mlit.applyDiff', {
+        permitId: item.permitId,
+        permitDataVersion: item.permitDataVersion,
+        reason: reason
+      }).then(function(data) {
+        showToast('期限を反映しました。監査ID: ' + data.auditId, false);
+        loadMlitDiffs();
+      }).catch(function(error) { showToast(error.message, true); });
+    }
+    function dismissMlitDiff(item) {
+      var reason = window.prompt('MLIT期限差分を却下する理由を入力してください。');
+      if (!reason) return;
+      api('mlit.dismissDiff', {
+        permitId: item.permitId,
+        reason: reason
+      }).then(function(data) {
+        showToast('差分を却下しました。監査ID: ' + data.auditId, false);
+        loadMlitDiffs();
+      }).catch(function(error) { showToast(error.message, true); });
+    }
+
     function loadOperations() {
       if (!hasCapability('operations.read')) { showScreen('companies'); return; }
       Promise.all([api('operations.getStatus', {}), hasCapability('users.read') ? api('users.list', {}) : Promise.resolve([])])
@@ -588,11 +816,20 @@
           setText('ops-mode', status.notificationMode); setText('ops-ready', status.companyCounts.sendReady);
           setText('ops-needs-setup', status.companyCounts.needsSetup);
           setText('ops-quota', status.quotaRemainingRecipients === null ? '確認不可' : status.quotaRemainingRecipients);
+          setText('ops-mlit-mode', status.mlit.mode);
+          setText('ops-mlit-stale', status.mlit.staleOver7Days);
+          setText('ops-mlit-diffs', status.mlit.pendingDiffs);
           setText('promotion-evidence', '現段階: ' + status.promotionEvidence.businessDays + '営業日 / SENT ' +
             status.promotionEvidence.sentCount + '件 / 未解決 ' + status.promotionEvidence.unresolvedCount + '件');
           var modeSelect = byId('mode-select'); modeSelect.replaceChildren();
           MODES.forEach(function(mode){ var option = document.createElement('option'); option.value = mode; option.textContent = mode;
             option.selected = mode === status.notificationMode; modeSelect.appendChild(option); });
+          var mlitModeSelect = byId('mlit-mode-select'); mlitModeSelect.replaceChildren();
+          MLIT_MODES.forEach(function(mode) {
+            var option = document.createElement('option'); option.value = mode; option.textContent = mode;
+            option.selected = mode === status.mlit.mode; mlitModeSelect.appendChild(option);
+          });
+          byId('mlit-mode-admin').classList.toggle('hidden', !hasCapability('mlit.configure'));
           renderUsers(ACTIVE_USERS);
         }).catch(function(error){ showToast(error.message, true); });
     }
@@ -607,14 +844,29 @@
       }).then(function(data){ showToast('modeを' + data.mode + 'へ変更しました', false); loadOperations(); })
         .catch(function(error){ showToast(error.message, true); });
     }
+    function changeMlitMode() {
+      if (!hasCapability('mlit.configure')) return;
+      var mode = byId('mlit-mode-select').value;
+      var reason = byId('mlit-mode-reason').value.trim();
+      if (!reason) { showToast('MLIT modeの変更理由を入力してください', true); return; }
+      if (!window.confirm('MLIT確認modeを' + mode + 'へ変更しますか？')) return;
+      api('operations.setMlitMode', {mode:mode, reason:reason})
+        .then(function(data) {
+          showToast('MLIT modeを' + data.mode + 'へ変更しました', false);
+          loadOperations();
+        }).catch(function(error) { showToast(error.message, true); });
+    }
     function applySchema() {
-      var confirmation = window.prompt('バックアップ取得後であることを確認し、APPLY_SCHEMA_V1 と入力してください。');
-      if (confirmation !== 'APPLY_SCHEMA_V1') return;
+      var confirmation = window.prompt('バックアップ取得後であることを確認し、APPLY_SCHEMA_V2 と入力してください。');
+      if (confirmation !== 'APPLY_SCHEMA_V2') return;
       api('operations.ensureSchema', {
-        applyInitialRoles:true, backfillCompanies:true, applyProtections:false, confirmation:confirmation
+        applyInitialRoles:true, backfillCompanies:true, backfillPermitSync:true,
+        applyProtections:false, confirmation:confirmation
       }).then(function(data){
-        setText('schema-result', '完了: 補完会社 ' + data.backfilledCompanies + '社 / 監査ID ' + data.auditId);
-        showToast('schema v1を適用しました', false);
+        setText('schema-result', '完了: 補完会社 ' + data.backfilledCompanies +
+          '社 / 許可version補完 ' + data.permitSyncBackfill.permits +
+          '件 / 監査ID ' + data.auditId);
+        showToast('schema v2を適用しました', false);
       }).catch(function(error){ showToast(error.message, true); });
     }
     function renderUsers(users) {
@@ -647,11 +899,15 @@
     byId('company-query').addEventListener('keydown', function(event){ if(event.key==='Enter') loadCompanies(); });
     byId('company-review-button').addEventListener('click', reviewCompanyChanges);
     byId('company-save-button').addEventListener('click', saveCompany);
+    byId('company-monitoring-button').addEventListener('click', toggleCompanyMonitoring);
     byId('queue-refresh-button').addEventListener('click', loadQueues);
     byId('queue-status-filter').addEventListener('change', loadQueues);
     byId('queue-preview-button').addEventListener('click', previewQueues);
     byId('notification-send-button').addEventListener('click', sendQueues);
+    byId('mlit-diff-status').addEventListener('change', loadMlitDiffs);
+    byId('mlit-diff-refresh-button').addEventListener('click', loadMlitDiffs);
     byId('mode-change-button').addEventListener('click', changeMode);
+    byId('mlit-mode-change-button').addEventListener('click', changeMlitMode);
     byId('schema-button').addEventListener('click', applySchema);
     window.addEventListener('load', initGoogleLogin);
   </script>

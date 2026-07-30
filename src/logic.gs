@@ -49,57 +49,104 @@ function enrichMlitPermitForDisplay_(permit) {
   };
 }
 
+function enrichCanonicalPermitForDisplay_(permit, company) {
+  var daysRemaining = resolveDaysRemaining_(permit.expiry_date, null);
+  var observation = findMlitObservationForPermit_(permit);
+  var mlitState = getMlitObservationState_(permit);
+  return {
+    permit_id: String(permit.permit_id || ''),
+    company_id: String(permit.company_id || ''),
+    company_name: company
+      ? String(company.company_name_normalized || company.company_name_raw || '')
+      : String(permit.company_name_raw || ''),
+    permit_number: String(permit.permit_number_full || ''),
+    authority: getCanonicalPermitAuthority_(permit),
+    category: String(permit.permit_category || ''),
+    expiry_date: permit.expiry_date || '',
+    days_remaining: daysRemaining,
+    current_status: String(permit.current_status || ''),
+    permit_data_version: getPermitDataVersion_(permit),
+    status: resolvePermitStatus_(daysRemaining),
+    mlit: mlitState,
+    observed_expiry_date: observation
+      ? observation.observed_expiry_date || observation.expiry_date || ''
+      : '',
+    diff_status: observation ? String(observation.diff_status || 'NONE') : 'NONE'
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
 function buildDashboardData_() {
-  var permits = readRecords_(SHEETS.MLITPermits);
+  var permits = readRecords_(SHEETS.Permits);
   var companies = readRecords_(SHEETS.Companies);
   var syncRuns = readRecords_(SHEETS.SyncRuns);
-
-  // Company lookup
   var companyMap = {};
-  companies.forEach(function(c) {
-    companyMap[c.company_id] = c;
+  companies.forEach(function(company) {
+    companyMap[String(company.company_id || '')] = company;
   });
 
-  // Build rows
   var rows = [];
   var counts = { expired: 0, danger: 0, warn: 0, ok: 0, unknown: 0, total: 0 };
   var andon = { scrapeFail: 0, needsReview: 0 };
 
-  permits.forEach(function(p) {
-    // ホワイトリスト方式: OKのみ表示、それ以外（NOT_FOUND, DUPLICATE_DELETE等）は非表示
-    if (p.fetch_status !== 'OK') return;
-
-    var row = enrichMlitPermitForDisplay_(p);
-    var status = row.status;
-
-    // Company status check
-    var company = companyMap[p.company_id] || {};
-    if (company.status === 'INACTIVE') return; // skip inactive
-
+  permits.forEach(function(permit) {
+    var company = companyMap[String(permit.company_id || '')];
+    if (!isCompanyPermitMonitoringEnabled_(company)) return;
+    var row = enrichCanonicalPermitForDisplay_(permit, company);
     counts.total++;
-    if (counts[status] !== undefined) counts[status]++;
-
+    if (counts[row.status] !== undefined) counts[row.status]++;
+    if (row.mlit.code === 'NOT_SYNCED' || row.mlit.code === 'STALE') andon.scrapeFail++;
+    if (row.diff_status === 'PENDING_REVIEW') andon.needsReview++;
     rows.push(row);
   });
 
-  // Sort by days_remaining ascending (most urgent first)
-  rows.sort(function(a, b) {
-    var da = a.days_remaining !== null ? a.days_remaining : 99999;
-    var db = b.days_remaining !== null ? b.days_remaining : 99999;
-    return da - db;
+  companies.forEach(function(company) {
+    if (!isCompanyPermitMonitoringEnabled_(company)) return;
+    var hasPermit = permits.some(function(permit) {
+      return String(permit.company_id || '') === String(company.company_id || '');
+    });
+    if (hasPermit) return;
+    rows.push({
+      permit_id: '',
+      company_id: String(company.company_id || ''),
+      company_name: String(company.company_name_normalized || company.company_name_raw || ''),
+      permit_number: '',
+      authority: '',
+      category: '',
+      expiry_date: '',
+      days_remaining: null,
+      current_status: 'NOT_REGISTERED',
+      permit_data_version: 0,
+      status: 'unknown',
+      mlit: {
+        code: 'NOT_SYNCED',
+        label: '許可情報未登録',
+        sendFresh: false,
+        lastAttemptedAt: '',
+        lastSuccessAt: '',
+        diffStatus: 'NONE'
+      },
+      observed_expiry_date: '',
+      diff_status: 'NONE'
+    });
+    counts.total++;
+    counts.unknown++;
+    andon.needsReview++;
   });
 
-  // Sync info
-  var lastSync = syncRuns.length > 0 ? syncRuns[syncRuns.length - 1] : null;
+  rows.sort(function(a, b) {
+    var aDays = a.days_remaining !== null ? a.days_remaining : 99999;
+    var bDays = b.days_remaining !== null ? b.days_remaining : 99999;
+    return aDays - bDays;
+  });
 
   return {
     rows: rows,
     counts: counts,
     andon: andon,
-    lastSync: lastSync
+    lastSync: syncRuns.length > 0 ? syncRuns[syncRuns.length - 1] : null
   };
 }
 
@@ -110,9 +157,11 @@ function getCompanyDetail_(companyId) {
   // Company info
   var company = findByKey_(SHEETS.Companies, 'company_id', companyId);
 
-  // Permits from MLITPermits
-  var permits = findAllByKey_(SHEETS.MLITPermits, 'company_id', companyId)
-    .map(enrichMlitPermitForDisplay_);
+  // 承認済みPermitsを主表示し、MLIT観測状態を併記する。
+  var permits = findAllByKey_(SHEETS.Permits, 'company_id', companyId)
+    .map(function(permit) {
+      return enrichCanonicalPermitForDisplay_(permit, company);
+    });
 
   // Notification history
   var allNotifs = readRecords_(SHEETS.Notifications);

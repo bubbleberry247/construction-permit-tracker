@@ -1,6 +1,8 @@
 # 建設業許可証管理システム — セットアップガイド
 
-東海インプル建設㈱向け 協力会社145社 建設業許可証管理システム
+東海インダストリアルコンサルティング向け 会社マスタ候補127社 建設業許可証管理システム
+
+> 現行GAS移行はルート`README.md`と`docs/`の本番ゲートを優先します。以下のPython/OCR手順は旧パイプラインの保守資料であり、127社の承認済み移行に代えて本番実行しません。
 
 ---
 
@@ -133,20 +135,20 @@ npm run push
 
 スクリプトエディタ（または Sheets メニュー「許可証管理」）から:
 
-1. **`initSheetHeaders()`** を実行 → 全シート（Companies/Permits/Notifications等）のヘッダ初期化
-2. **Config シートに設定値を入力**:
+1. Web管理画面のschema移行をUAT複製シートで実行し、追加列とbackfill結果を確認
+2. **Config シートとScript Propertiesに設定値を入力**:
    - `ADMIN_EMAILS` : 管理者通知先（例: `fujita@example.com`）
-   - `FORM_ID` : 許可証提出 Google Form のID
    - `NOTIFY_STAGES_DAYS` : `120,90,60,45,30,14,0`（デフォルト）
    - `ENABLE_SEND` : `false`（テスト中）→ 本番は `true`
-3. **`checkConfigMenu()`** → 「設定チェック OK」を確認
-4. **`sendTestEmail('自分のメール')`** → テストメール受信確認
-5. **`setupDailyTrigger()`** → 日次バッチ（毎朝8時）のトリガーを設定
-6. `ENABLE_SEND` を `true` に変更 → 本番稼働
+   - `MLIT_SYNC_MODE` : 初期値`OFF`
+3. 認証・権限・schema・127社照合のUAT証跡を確認
+4. `MLIT_SYNC_MODE=SHADOW`で内部検証
+5. 管理対象会社の承認後、管理トリガーを1回だけ設定
+6. 通知は`ENABLE_SEND=false`のままINTERNAL_TESTを完了してから段階移行
 
 ---
 
-## 5. 初回実行手順（3月末フロー）
+## 5. 旧Pythonパイプライン初回手順（現行GAS移行では実行しない）
 
 ### Step 0: 会社マスタ取込（最初の1回のみ）
 
@@ -154,7 +156,7 @@ npm run push
 python src/import_company_master.py --xlsx "継続取引業者リスト.xlsx"
 ```
 
-Companies シートに145社が登録されることを確認。
+この旧コマンドで本番Companiesへ直接登録しないでください。現行移行は127社を`MasterImportStaging`へ入れ、全件照合承認後に正本化します。
 
 ### Step 1: テストPDFで動作確認
 

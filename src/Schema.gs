@@ -8,7 +8,8 @@ var SECURE_COMPANIES_HEADERS_ = [
   'contact_email_cc', 'phone', 'status', 'created_at', 'updated_at',
   'vendor_no', 'internal_owner_email',
   'contact_verified_at', 'contact_verified_by', 'notification_mode',
-  'data_version', 'created_by', 'updated_by'
+  'data_version', 'created_by', 'updated_by',
+  'permit_monitoring_enabled'
 ];
 
 var SECURE_NOTIFICATIONS_HEADERS_ = [
@@ -73,6 +74,112 @@ function backfillCompanySystemFields_() {
   return changed;
 }
 
+function backfillPermitSyncFields_() {
+  var permitChanges = 0;
+  readRecords_(SHEETS.Permits).forEach(function(permit) {
+    var version = Number(permit.permit_data_version);
+    if (!Number.isInteger(version) || version < 1) {
+      updateRecord_(SHEETS.Permits, permit._row, { permit_data_version: 1 });
+      permitChanges++;
+    }
+  });
+
+  var observationChanges = 0;
+  readRecords_(SHEETS.MLITPermits).forEach(function(observation) {
+    var updates = {};
+    var fetchStatus = String(observation.fetch_status || '').trim().toUpperCase();
+    if (!String(observation.observed_expiry_date || '').trim() &&
+        String(observation.expiry_date || '').trim()) {
+      updates.observed_expiry_date = observation.expiry_date;
+    }
+    if (!String(observation.last_attempted_at || '').trim() &&
+        String(observation.last_synced || '').trim()) {
+      updates.last_attempted_at = observation.last_synced;
+    }
+    if (fetchStatus === 'OK' &&
+        !String(observation.last_success_at || '').trim() &&
+        String(observation.last_synced || '').trim()) {
+      updates.last_success_at = observation.last_synced;
+    }
+    if (!String(observation.diff_status || '').trim()) {
+      updates.diff_status = 'NONE';
+    }
+    if (!String(observation.diff_type || '').trim()) {
+      var linkedPermit = findByKey_(
+        SHEETS.Permits,
+        'permit_id',
+        observation.permit_id
+      );
+      var existingDiffStatus = String(
+        observation.diff_status || updates.diff_status || 'NONE'
+      ).toUpperCase();
+      if (existingDiffStatus === 'PENDING_REVIEW' &&
+          fetchStatus.indexOf('NOT_FOUND') >= 0) {
+        updates.diff_type = 'NOT_FOUND';
+        updates.diff_risk_flags = 'MLIT_NOT_FOUND_3_TIMES';
+      } else if (existingDiffStatus === 'PENDING_REVIEW' && linkedPermit) {
+        var backfillClassification = classifyMlitExpiryDifference_(
+          linkedPermit.expiry_date,
+          observation.observed_expiry_date || observation.expiry_date
+        );
+        updates.diff_type = backfillClassification.type;
+        updates.diff_risk_flags = backfillClassification.riskFlags.join('|');
+      } else {
+        updates.diff_type = 'NONE';
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      updateRecord_(SHEETS.MLITPermits, observation._row, updates);
+      observationChanges++;
+    }
+  });
+  var queueChanges = 0;
+  readRecords_(SHEETS.NotificationQueue).forEach(function(queue) {
+    var permit = findByKey_(SHEETS.Permits, 'permit_id', queue.permit_id);
+    var company = findByKey_(SHEETS.Companies, 'company_id', queue.company_id);
+    if (!permit || !company || !normalizeExpiryDateKey_(permit.expiry_date)) return;
+    var updates = {};
+    if (!Number(queue.source_company_version || 0)) {
+      updates.source_company_version = getCompanyVersion_(company);
+    }
+    if (!Number(queue.source_permit_version || 0)) {
+      updates.source_permit_version = getPermitDataVersion_(permit);
+    }
+    if (!String(queue.source_expiry_date || '').trim()) {
+      updates.source_expiry_date = normalizeExpiryDateKey_(permit.expiry_date);
+    }
+    if (/^PERMIT:[^:]+:STAGE:/.test(String(queue.idempotency_key || ''))) {
+      updates.idempotency_key = buildNotificationIdempotencyKey_(
+        permit.permit_id, permit.expiry_date, queue.stage
+      );
+    }
+    if (Object.keys(updates).length > 0) {
+      updateRecord_(SHEETS.NotificationQueue, queue._row, updates);
+      queueChanges++;
+    }
+  });
+
+  var notificationChanges = 0;
+  readRecords_(SHEETS.Notifications).forEach(function(notification) {
+    if (!/^PERMIT:[^:]+:STAGE:/.test(String(notification.idempotency_key || ''))) return;
+    var permit = findByKey_(SHEETS.Permits, 'permit_id', notification.permit_id);
+    if (!permit || !normalizeExpiryDateKey_(permit.expiry_date)) return;
+    updateRecord_(SHEETS.Notifications, notification._row, {
+      idempotency_key: buildNotificationIdempotencyKey_(
+        permit.permit_id, permit.expiry_date, notification.stage
+      )
+    });
+    notificationChanges++;
+  });
+
+  return {
+    permits: permitChanges,
+    observations: observationChanges,
+    queueItems: queueChanges,
+    notifications: notificationChanges
+  };
+}
+
 function seedInitialUserAccess_(actorEmail) {
   var sheet = getSheet_(SHEETS.UserAccess);
   ensureHeaders_(sheet, USERACCESS_HEADERS);
@@ -122,18 +229,26 @@ function protectSheetForOwner_(sheetName) {
 function ensureApplicationSchemaSecure_(payload, user, requestId) {
   assertOnlyKeys_(
     payload,
-    ['applyInitialRoles', 'backfillCompanies', 'applyProtections', 'confirmation'],
+    [
+      'applyInitialRoles', 'backfillCompanies', 'backfillPermitSync',
+      'applyProtections', 'confirmation'
+    ],
     'operations.ensureSchema'
   );
   var requestedMutation = payload.applyInitialRoles === true ||
     payload.backfillCompanies === true ||
+    payload.backfillPermitSync === true ||
     payload.applyProtections === true;
-  if (requestedMutation && String(payload.confirmation || '') !== 'APPLY_SCHEMA_V1') {
+  if (requestedMutation && String(payload.confirmation || '') !== 'APPLY_SCHEMA_V2') {
     throw appError_('CONFIRMATION_REQUIRED', 'schema適用確認が一致しません', false);
   }
 
   var results = {};
   results.Companies = ensureSheetByName_(SHEETS.Companies, SECURE_COMPANIES_HEADERS_).result;
+  results.Permits = ensureSheetByName_(SHEETS.Permits, PERMITS_HEADERS).result;
+  results.MLITPermits = ensureSheetByName_(
+    SHEETS.MLITPermits, MLIT_PERMITS_HEADERS_
+  ).result;
   results.Notifications = ensureSheetByName_(
     SHEETS.Notifications, SECURE_NOTIFICATIONS_HEADERS_
   ).result;
@@ -154,8 +269,14 @@ function ensureApplicationSchemaSecure_(payload, user, requestId) {
   if (!getSecureSetting_('ENABLE_SEND')) {
     setSecureSetting_('ENABLE_SEND', 'FALSE');
   }
+  if (!getSecureSetting_('MLIT_SYNC_MODE')) {
+    setSecureSetting_('MLIT_SYNC_MODE', 'OFF');
+  }
 
   var backfilled = payload.backfillCompanies === true ? backfillCompanySystemFields_() : 0;
+  var permitSyncBackfill = payload.backfillPermitSync === true
+    ? backfillPermitSyncFields_()
+    : { permits: 0, observations: 0, queueItems: 0, notifications: 0 };
   var seededUsers = payload.applyInitialRoles === true
     ? seedInitialUserAccess_(user.email)
     : [];
@@ -163,6 +284,8 @@ function ensureApplicationSchemaSecure_(payload, user, requestId) {
   if (payload.applyProtections === true) {
     [
       SHEETS.Companies,
+      SHEETS.Permits,
+      SHEETS.MLITPermits,
       SHEETS.Config,
       SHEETS.UserAccess,
       SHEETS.NotificationQueue,
@@ -183,6 +306,7 @@ function ensureApplicationSchemaSecure_(payload, user, requestId) {
     request_id: requestId,
     details: JSON.stringify({
       backfilledCompanies: backfilled,
+      permitSyncBackfill: permitSyncBackfill,
       seededUsers: seededUsers,
       protectedSheets: protectedSheets
     }),
@@ -192,9 +316,11 @@ function ensureApplicationSchemaSecure_(payload, user, requestId) {
   return {
     sheets: results,
     backfilledCompanies: backfilled,
+    permitSyncBackfill: permitSyncBackfill,
     seededUsers: seededUsers,
     protectedSheets: protectedSheets,
     notificationMode: getSecureSetting_('NOTIFICATION_MODE'),
+    mlitSyncMode: getSecureSetting_('MLIT_SYNC_MODE'),
     auditId: audit.log_id
   };
 }

@@ -2,8 +2,8 @@
 
 作成日: 2026-07-30
 対象branch: `codex/phase0-p1-safety`
-基点commit: `d967308`
-状態: **ローカル実装・自動テスト・本番データ読取専用dry-run完了／UAT・本番反映未実施**
+基点commit: `707794a`
+状態: **会社マスタ・MLIT差分・通知連携のローカル実装、自動テスト、本番データ読取専用dry-run完了／UAT・本番反映未実施**
 
 ## 1. 結論
 
@@ -17,8 +17,6 @@
 - 127社dry-runには`REVIEW_REQUIRED` 13社と`SYSTEM_ONLY` 4社がある。
 - 設計で必須とした複製スプレッドシート・別deploymentでの攻撃テスト／UATが未実施。
 - `INTERNAL_TEST`以降の実送信、10営業日の段階昇格条件は時間経過と運用承認が必要。
-- MLIT再照合で更新される`MLITPermits.expiry_date`と、通知正本の
-  `Permits.expiry_date`を安全に同期する承認フローが未実装。
 
 本番の既存deployment v24、公開範囲`MYSELF`、トリガー0件、外部送信0件は変更していない。
 
@@ -61,6 +59,32 @@
 - `OFF`から`AUTO_ALL`まで8段階のnotification modeを実装。
 - mode昇格は1段階ずつ、10営業日、実送信5件、未解決0件、運用確認を要求。
 - 毎日8時の処理は候補生成が先で、auto対象mode／stageだけ後段送信。
+
+### MLIT観測・許可期限差分
+
+- 対象選択を`MLITPermits`起点から、管理対象の`Companies + Permits`起点へ変更。
+- MLIT観測行がない許可は`MLITPermits`へseedしてから確認候補にする。
+- `permit_monitoring_enabled`を会社マスタに追加し、operations_adminだけが変更可能。
+- MLIT確認modeを`OFF`、`SHADOW`、`MANUAL_APPLY`の3段階に限定。
+- 通常確認は毎日3時台に最大25件、全体7日一巡を目標に動的件数を算出。
+- 通知対象は毎日7時台に優先確認し、送信時点の成功確認24時間以内を必須化。
+- 失敗時は`last_attempted_at`だけを進め、`last_success_at`と`last_synced`を進めない。
+- transient failureは指数backoff、NOT_FOUNDは3回連続で初めて確認待ち。
+- 期限一致、通常の5年延長、短縮、5年幅逸脱、商号不一致、複数候補を分類。
+- `MLITPermits`は観測値、`Permits`は承認済み正本とし、自動上書きを禁止。
+- MANUAL_APPLY時だけ担当者が期限差分を反映し、`permit_data_version`を増分。
+- 期限反映時に関連する未送信通知候補を`STALE`化。
+- 通知冪等キーを`permit_id + expiry_date + stage`へ変更。
+- 送信直前に会社version、許可version、期限、MLIT鮮度、未解決差分を再検証。
+- 期限切れ許可もMLIT巡回と`EXPIRED`通知候補生成の対象に維持。
+- 送信済みの緊急stageから過去の緩いstageへ逆戻りする候補生成を禁止。
+- 会社詳細に「MLITを再確認」優先予約、差分一覧、承認済み値と観測値の併記を追加。
+
+### 受付機能の簡素化
+
+- 協力会社からのシステム受付は現行スコープ外とし、`FormHandler.gs`を削除。
+- 現行GASから受付設定、受付シートmodel、受領確認メール文言への依存を除去。
+- 既存の本番シートや外部サービスはローカル実装では削除・改名していない。
 
 ### バックアップ・移行
 
@@ -120,12 +144,13 @@
 
 ## 4. テスト結果
 
-2026-07-30実行:
+2026-07-30 最新実行:
 
 - Phase 0送信安全テスト: 30/30 PASS
-- 認証・マスタ・queue・移行・構文テスト: 21/21 PASS
-- Python照合・既存reconcile回帰: 52/52 PASS
-- 合計: 103/103 PASS
+- 認証・マスタ・queue・移行・構文テスト: 26/26 PASS
+- MLIT同期・差分・期限切れ回帰テスト: 13/13 PASS
+- Python全回帰テスト: 404/404 PASS
+- 今回の実行合計: 473/473 PASS
 - `git diff --check`: error 0
 - 全Apps Scriptファイルと`index.html`内JavaScriptの構文解析: PASS
 - clasp認識対象に新規`.gs`ファイルを含むこと: 確認済み
@@ -140,6 +165,13 @@
 - 同一request IDで二重更新しない。
 - メール空欄・不正形式を送信準備未完了にする。
 - stale queue、手動modeのAUTO origin、pilot外会社を拒否。
+- 許可versionまたは期限が候補生成後に変わった場合の送信を拒否。
+- MLIT行がない管理対象許可もCompaniesとPermitsからseed。
+- transient failureと日付解析異常で正本・成功時刻を更新しない。
+- 商号不一致、複数候補、3回連続NOT_FOUNDを自動反映しない。
+- 通常5年更新、短縮、5年幅逸脱を分類。
+- 期限切れ許可のMLIT巡回とEXPIRED候補生成を維持。
+- 送信済み緊急stageから緩いstageへ逆戻りしない。
 - `OFF`時の送信、重複予約、quota不足を拒否。
 - 数式インジェクション、XSS用HTML挿入、メールヘッダー注入を防止。
 - Gmail成功後のログ失敗時に自動再送しない。
@@ -171,7 +203,7 @@ UserAccess:
 初回schema:
 
 - `operations.ensureSchema`をoperations_adminで実行。
-- mutation時のconfirmationは`APPLY_SCHEMA_V1`。
+- mutation時のconfirmationは`APPLY_SCHEMA_V2`。
 - initial role、company backfill、sheet protectionを適用。
 
 ## 6. 会社マスタ移行手順
@@ -203,7 +235,7 @@ UserAccess:
 2. schema、initial role、protected settingsを適用。
 3. 認証攻撃テストと3アカウント権限別UATを実施。
 4. PC／スマートフォンで検索、更新、競合、復帰を確認。
-5. MLIT期限差分の確認・反映フローを実装し、通知正本が`Permits`であることを固定。
+5. MLIT期限差分・送信前鮮度・期限切れ回帰をUAT複製環境で確認。
 6. 127社の人手照合を承認。
 7. 本番バックアップを実行。
 8. 本番へコード反映。ただし公開範囲と`ENABLE_SEND=FALSE`を維持。
@@ -234,18 +266,5 @@ UserAccess:
 - 5営業日のマスタ更新運用。
 - INTERNAL_TEST、MANUAL_PILOT以降の実運用。
 - 10営業日ごとの段階昇格。
-- `MLITPermits`で発見した有効期限変更を`Permits`へ反映する差分確認キュー。
 
-これらはコード未実装ではなく、別環境・人手判断・時間経過・本番変更を伴う受入ゲートである。
-
-ただしMLIT期限差分の確認・反映キューだけは追加実装事項である。現状は次の通り。
-
-- 本番インストール型トリガーは0件で、自動再照合は稼働していない。
-- `runDailyMlitRolling_()`は`MLITPermits`を既定1日8件、7日以上未同期の古い順に再照合する。
-- 国交省照合成功時は`MLITPermits.expiry_date`を更新する。
-- フォームで新許可証を受領した場合は`Permits.expiry_date`を更新する。
-- `runDailyNotifications_()`は`Permits.expiry_date`を基に状態を更新するが、
-  MLITの期限を`Permits`へコピーしない。
-
-期限日を無条件自動上書きすると、別許可区分・別行政庁・誤照合の影響を通知へ直結させる。
-そのため、MLIT差分は候補生成、担当者確認、`Permits`反映、通知候補STALE化、監査記録の順にする。
+これらは別環境・人手判断・時間経過・本番変更を伴う受入ゲートである。MLIT期限差分の候補生成、担当者確認、`Permits`反映、通知候補STALE化、監査記録はローカルコードとして実装済みだが、本番トリガーは0件のままで自動再照合は稼働していない。

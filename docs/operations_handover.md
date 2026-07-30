@@ -1,5 +1,7 @@
 # 運用引き渡しドキュメント (2026-04-27、2026-04-29 Phase R 追記)
 
+> この文書は旧145社・Phase R運用の履歴です。2026-07-30以降の会社マスタ127社候補、Web更新、MLIT差分、通知キューの現行設計は`company_master_notification_implementation_record_20260730.md`と`mlit_nightly_scheduler.md`を正とします。
+
 ## 経緯
 
 藤田さん向け納品物 (協力会社書類管理 ZIP) の生成は **2026-04-27 で 1 次完結** しましたが、

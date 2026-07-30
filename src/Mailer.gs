@@ -11,12 +11,12 @@ var Mailer = {
    */
   _getStageMessage: function(stage) {
     var messages = {
-      '90':  '許可証の有効期限まで約90日です。更新が完了しましたら、新しい許可証PDFをGoogleフォーム経由でご提出ください。',
-      '60':  '許可証の有効期限まで約60日です。更新手続きはお済みでしょうか。完了後は新しい許可証PDFをGoogleフォーム経由でご提出ください。',
-      '30':  '【要確認】許可証の有効期限まで約30日です。更新状況をご確認ください。更新済みの場合は、新しい許可証PDFをGoogleフォーム経由でご提出ください。',
-      'EXPIRED': '許可証の有効期限が過ぎています。更新済みの場合は、新しい許可証PDFを至急ご提出ください。未更新の場合は、発注・入場に影響が生じる可能性がありますのでご確認ください。'
+      '90':  '許可証の有効期限まで約90日です。更新手続きの予定をご確認ください。',
+      '60':  '許可証の有効期限まで約60日です。更新手続きの状況をご確認ください。',
+      '30':  '【要確認】許可証の有効期限まで約30日です。更新状況をご確認ください。',
+      'EXPIRED': '許可証の有効期限が過ぎています。更新済みの場合は新しい許可情報をご連絡ください。未更新の場合は、発注・入場に影響が生じる可能性がありますのでご確認ください。'
     };
-    return messages[String(stage)] || '許可証の更新状況をご確認ください。更新済みの場合は、新しい許可証PDFをGoogleフォーム経由でご提出ください。';
+    return messages[String(stage)] || '許可証の更新状況をご確認ください。';
   },
 
   /**
@@ -28,15 +28,11 @@ var Mailer = {
    */
   buildExpiryNotification: function(permit, company, stage) {
     var adminEmails = getConfig_('ADMIN_EMAILS');
-    var formId = getConfig_('FORM_ID');
     var expiryDateStr = formatDate_(
       permit.expiry_date instanceof Date ? permit.expiry_date : parseDate_(permit.expiry_date),
       'yyyy/MM/dd'
     );
     var subject = '【重要】建設業許可 更新手続のお願い（満了日：' + expiryDateStr + '）';
-    var formUrl = formId
-      ? 'https://docs.google.com/forms/d/' + formId + '/viewform'
-      : '（フォームURL未設定）';
     var contactInfo = getConfig_('CONTACT_INFO') || '本メールの送信元までご連絡ください';
     var stageMessage = this._getStageMessage(stage);
     var companyName = company.company_name_normalized || company.company_name_raw || '';
@@ -50,8 +46,8 @@ var Mailer = {
       '　満了日：' + expiryDateStr + '\n\n' +
       '■ ご連絡内容\n' +
       stageMessage + '\n\n' +
-      '■ 許可証・受付票の提出はこちら\n' +
-      formUrl + '\n\n' +
+      '■ 更新完了時のご連絡\n' +
+      '更新後の許可情報は、以下のお問い合わせ先へご連絡ください。\n\n' +
       '■ お問い合わせ先\n' +
       contactInfo + '\n\n' +
       '何卒よろしくお願いいたします。';
@@ -91,84 +87,6 @@ var Mailer = {
       body: built.body,
       options: mailOptions,
       notification: Object.assign({}, built, { result: '', error_message: '' })
-    });
-  },
-
-  /**
-   * 許可証受領確認メールを送信する
-   * @param {Object} permit
-   * @param {Object} company
-   */
-  sendReceiptConfirmation: function(permit, company) {
-    var adminEmails = getConfig_('ADMIN_EMAILS');
-
-    var expiryDateStr = formatDate_(
-      permit.expiry_date instanceof Date ? permit.expiry_date : parseDate_(permit.expiry_date),
-      'yyyy/MM/dd'
-    );
-
-    var subject = '【受領確認】建設業許可証を受領しました（' + (company.company_name_normalized || company.company_name_raw) + '）';
-
-    // 次回通知予定ステージを算出
-    var stageDays;
-    try {
-      stageDays = parseNotifyStages_(getConfig_('NOTIFY_STAGES_DAYS'));
-    } catch (stageErr) {
-      logError_('受領確認メール停止: NOTIFY_STAGES_DAYS不正', stageErr);
-      return recordBlockedNotification_({
-        company_id: company.company_id,
-        permit_id: permit.permit_id,
-        to_email: company.contact_email,
-        cc_email: '',
-        stage: 'RECEIPT',
-        subject: subject,
-        body: ''
-      }, 'BLOCKED_INVALID_STAGES', stageErr.message || String(stageErr));
-    }
-    var days = daysUntil_(permit.expiry_date);
-    var nextStage = '（算出不可）';
-    for (var i = 0; i < stageDays.length; i++) {
-      if (days > stageDays[i]) {
-        nextStage = '満了' + stageDays[i] + '日前（約 ' +
-          formatDate_(new Date(new Date().getTime() + (days - stageDays[i]) * 86400000), 'yyyy/MM/dd') + '）';
-        break;
-      }
-    }
-
-    var body =
-      (company.company_name_normalized || company.company_name_raw) + ' ' + (company.contact_person || '') + ' 様\n\n' +
-      'この度は建設業許可証をご提出いただきありがとうございます。\n' +
-      '以下の内容で受領いたしましたのでご確認ください。\n\n' +
-      '■ 受領内容\n' +
-      '　許可番号：' + permit.permit_number_full + '\n' +
-      '　満了日：' + expiryDateStr + '\n\n' +
-      '■ 次回通知予定\n' +
-      '　' + nextStage + '\n\n' +
-      'ご不明な点がございましたらご連絡ください。\n' +
-      'よろしくお願いいたします。';
-
-    var notificationData = {
-      company_id: company.company_id,
-      permit_id:  permit.permit_id,
-      to_email:   company.contact_email,
-      cc_email:   '',
-      bcc_email:  adminEmails || '',
-      stage:      'RECEIPT',
-      subject:    subject,
-      body:       body,
-      result:     '',
-      error_message: ''
-    };
-
-    var mailOptions = {};
-    if (adminEmails) mailOptions.bcc = adminEmails;
-
-    return sendSystemEmail_({
-      to: company.contact_email,
-      subject: subject,
-      body: body,
-      options: mailOptions,
-      notification: notificationData
     });
   },
 
@@ -243,7 +161,7 @@ var Mailer = {
 
     var body = lines.join('\n');
 
-    body += '\n\n■ ご対応のお願い\n更新が完了した業者様には、新しい許可証PDFをGoogleフォーム経由でご提出いただくようご案内ください。';
+    body += '\n\n■ ご対応のお願い\n期限差分がある場合は、システムのMLIT確認画面で公表情報と承認済み期限を確認してください。';
 
     var recipients = normalizeEmailRecipients_(adminEmails);
     if (recipients.length === 0) return;

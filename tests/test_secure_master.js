@@ -30,6 +30,7 @@ function baseContext() {
       contact_verified_by: 'm-fujita@tokai-ic.co.jp',
       notification_mode: 'MANUAL',
       status: 'ACTIVE',
+      permit_monitoring_enabled: true,
       data_version: 1,
       updated_at: '2026-07-01 10:00:00',
       updated_by: 'm-fujita@tokai-ic.co.jp'
@@ -49,10 +50,26 @@ function baseContext() {
     NotificationQueue: [{
       _row: 2, queue_id: 'Q1', company_id: 'C0001', permit_id: 'P1',
       stage: '90', source_data_version: 1, status: 'READY',
+      source_company_version: 1, source_permit_version: 1,
+      source_expiry_date: '2026-08-31',
       to_email: 'old@example.com', subject: 'subject', body_template: 'body',
-      idempotency_key: 'PERMIT:P1:STAGE:90'
+      idempotency_key: 'PERMIT:P1:EXPIRY:2026-08-31:STAGE:90'
     }],
-    Permits: [],
+    Permits: [{
+      _row: 2, permit_id: 'P1', company_id: 'C0001',
+      permit_authority_name: '愛知県知事', contractor_number: '12345',
+      permit_number_full: '愛知県知事許可 第12345号',
+      permit_category: '一般', expiry_date: '2026-08-31',
+      current_status: 'VALID', permit_data_version: 1
+    }],
+    MLITPermits: [{
+      _row: 2, permit_id: 'P1', company_id: 'C0001',
+      authority: '愛知県知事', permit_number: '12345',
+      observed_expiry_date: '2026-08-31', expiry_date: '2026-08-31',
+      fetch_status: 'OK', diff_status: 'NONE',
+      last_attempted_at: new Date().toISOString(),
+      last_success_at: new Date().toISOString()
+    }],
     Notifications: []
   };
   let uuid = 0;
@@ -68,9 +85,10 @@ function baseContext() {
     SHEETS: {
       Companies: 'Companies', UserAccess: 'UserAccess', AuditLog: 'AuditLog',
       NotificationQueue: 'NotificationQueue', Permits: 'Permits',
-      Notifications: 'Notifications'
+      MLITPermits: 'MLITPermits', Notifications: 'Notifications'
     },
     SECURE_COMPANIES_HEADERS_: [],
+    SECURE_NOTIFICATIONS_HEADERS_: [],
     NOTIFICATION_QUEUE_HEADERS: [],
     COMPANY_CONTACT_FIELDS_: undefined,
     ROLE_CAPABILITIES_: undefined,
@@ -78,7 +96,8 @@ function baseContext() {
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty: key => Object.prototype.hasOwnProperty.call(properties, key) ? properties[key] : null,
-        setProperty: (key, value) => { properties[key] = String(value); }
+        setProperty: (key, value) => { properties[key] = String(value); },
+        deleteProperty: key => { delete properties[key]; }
       })
     },
     CacheService: { getScriptCache: () => ({ get: () => null, put: () => {} }) },
@@ -128,6 +147,7 @@ function baseContext() {
     getNowString_: () => '2026-07-30 12:00:00',
     generateUuid_: () => `UUID-${++uuid}`,
     normalizeEmailRecipients_: value => String(value || '').split(',').map(v => v.trim()).filter(Boolean),
+    normalizePermitNumberForMlit_: value => String(value || '').replace(/^0+/, '') || '0',
     parseNotifyStages_: () => [90, 60, 30, 0],
     getSecureSetting_: key => properties[key] || '',
     setSecureSetting_: (key, value) => { properties[key] = String(value); },
@@ -141,6 +161,7 @@ function baseContext() {
   vm.runInContext(source('Security.gs'), context, { filename: 'Security.gs' });
   vm.runInContext(source('api.gs'), context, { filename: 'api.gs' });
   vm.runInContext(source('MasterService.gs'), context, { filename: 'MasterService.gs' });
+  vm.runInContext(source('PermitSyncService.gs'), context, { filename: 'PermitSyncService.gs' });
   vm.runInContext(source('NotificationQueue.gs'), context, { filename: 'NotificationQueue.gs' });
   context.appendAuditEvent_ = event => {
     const record = {
@@ -416,6 +437,100 @@ test('マスタ更新後のSTALE候補と手動modeのAUTO originを拒否する
   );
 });
 
+test('許可versionまたは期限が候補生成後に変わった場合は送信を拒否する', () => {
+  const versionChanged = baseContext();
+  versionChanged.__properties.NOTIFICATION_MODE = 'MANUAL_ALL';
+  versionChanged.__rows.NotificationQueue[0].status = 'APPROVED';
+  versionChanged.__rows.Permits[0].permit_data_version = 2;
+  assert.throws(
+    () => versionChanged.validateQueuedSendPolicy_({
+      queueId: 'Q1', origin: 'MANUAL', actorEmail: 'm-fujita@tokai-ic.co.jp'
+    }),
+    error => error.code === 'STALE_QUEUE'
+  );
+
+  const expiryChanged = baseContext();
+  expiryChanged.__properties.NOTIFICATION_MODE = 'MANUAL_ALL';
+  expiryChanged.__rows.NotificationQueue[0].status = 'APPROVED';
+  expiryChanged.__rows.Permits[0].expiry_date = '2031-08-31';
+  assert.throws(
+    () => expiryChanged.validateQueuedSendPolicy_({
+      queueId: 'Q1', origin: 'MANUAL', actorEmail: 'm-fujita@tokai-ic.co.jp'
+    }),
+    error => error.code === 'STALE_QUEUE'
+  );
+});
+
+test('通知冪等キーは許可ID・期限・stageをすべて含む', () => {
+  const context = baseContext();
+  const currentCycle = context.buildNotificationIdempotencyKey_(
+    'P1', '2026-08-31', '90'
+  );
+  const renewedCycle = context.buildNotificationIdempotencyKey_(
+    'P1', '2031-08-31', '90'
+  );
+  assert.equal(currentCycle, 'PERMIT:P1:EXPIRY:2026-08-31:STAGE:90');
+  assert.notEqual(currentCycle, renewedCycle);
+});
+
+test('期限切れ許可もEXPIRED通知候補を生成できる', () => {
+  const context = baseContext();
+  context.__rows.Permits[0].current_status = 'EXPIRED';
+  context.PermitsModel = {
+    getAllActive: () => [{ ...context.__rows.Permits[0] }]
+  };
+  context.daysUntil_ = () => -1;
+  context.Mailer = {
+    buildExpiryNotification: () => ({
+      to_email: 'old@example.com',
+      cc_email: '',
+      bcc_email: '',
+      subject: '期限切れ',
+      body: '本文'
+    })
+  };
+  const result = context.generateNotificationCandidates_('SYSTEM_TEST');
+  assert.equal(result.created, 1);
+  const created = context.__rows.NotificationQueue.find(
+    row => row.stage === 'EXPIRED'
+  );
+  assert.ok(created);
+  assert.match(
+    created.idempotency_key,
+    /:EXPIRY:2026-08-31:STAGE:EXPIRED$/
+  );
+});
+
+test('送信済みの最緊急stageから過去の緩いstageへ逆戻りしない', () => {
+  const context = baseContext();
+  context.__rows.Notifications.push({
+    _row: 2,
+    permit_id: 'P1',
+    stage: '30',
+    result: 'SENT',
+    idempotency_key: 'PERMIT:P1:EXPIRY:2026-08-31:STAGE:30'
+  });
+  assert.equal(
+    context.determineCandidateStage_(
+      20, [90, 60, 30, 0], 'P1', '2026-08-31'
+    ),
+    null
+  );
+  context.__rows.Notifications.push({
+    _row: 3,
+    permit_id: 'P1',
+    stage: 'EXPIRED',
+    result: 'SENT',
+    idempotency_key: 'PERMIT:P1:EXPIRY:2026-08-31:STAGE:EXPIRED'
+  });
+  assert.equal(
+    context.determineCandidateStage_(
+      -1, [90, 60, 30, 0], 'P1', '2026-08-31'
+    ),
+    null
+  );
+});
+
 test('INTERNAL_TESTは実宛先を内部許可宛先へ置換する', () => {
   const context = baseContext();
   context.__properties.NOTIFICATION_MODE = 'INTERNAL_TEST';
@@ -480,6 +595,18 @@ test('式インジェクションとメールヘッダー注入を無害化す�
     )
   );
   assert.doesNotMatch(source('index.html'), /\binnerHTML\b|insertAdjacentHTML|document\.write/);
+});
+
+test('現行GASソースはGoogleフォーム受付に依存しない', () => {
+  assert.equal(fs.existsSync(path.join(SRC, 'FormHandler.gs')), false);
+  const currentSource = fs.readdirSync(SRC)
+    .filter(name => /\.(gs|html)$/.test(name))
+    .map(name => source(name))
+    .join('\n');
+  assert.doesNotMatch(
+    currentSource,
+    /FORM_ID|onFormSubmit|sendReceiptConfirmation|Googleフォーム|setupDailyTrigger_|initSheetHeaders_/
+  );
 });
 
 let failed = 0;

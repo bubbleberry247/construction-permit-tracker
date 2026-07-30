@@ -179,7 +179,9 @@ function runDailyBackup_() {
 function installManagedTriggers_() {
   var managedHandlers = {
     runDailyNotifications_: true,
-    runDailyBackup_: true
+    runDailyBackup_: true,
+    runDailyMlitRolling_: true,
+    runPreNotificationMlitRefresh_: true
   };
   ScriptApp.getProjectTriggers().forEach(function(trigger) {
     if (managedHandlers[trigger.getHandlerFunction()]) {
@@ -198,6 +200,19 @@ function installManagedTriggers_() {
     .everyDays(1)
     .inTimezone('Asia/Tokyo')
     .create();
+  var mlitNightlyTrigger = ScriptApp.newTrigger('runDailyMlitRolling_')
+    .timeBased()
+    .atHour(3)
+    .everyDays(1)
+    .inTimezone('Asia/Tokyo')
+    .create();
+  var mlitPreNotificationTrigger = ScriptApp
+    .newTrigger('runPreNotificationMlitRefresh_')
+    .timeBased()
+    .atHour(7)
+    .everyDays(1)
+    .inTimezone('Asia/Tokyo')
+    .create();
   appendAuditEvent_({
     user_email: 'TECHNICAL_ADMIN',
     action: 'INSTALL_MANAGED_TRIGGERS',
@@ -206,13 +221,17 @@ function installManagedTriggers_() {
     details: JSON.stringify({
       handlers: [
         notificationTrigger.getHandlerFunction(),
-        backupTrigger.getHandlerFunction()
+        backupTrigger.getHandlerFunction(),
+        mlitNightlyTrigger.getHandlerFunction(),
+        mlitPreNotificationTrigger.getHandlerFunction()
       ]
     }),
     status: 'COMMITTED'
   });
   return {
     notificationTriggerId: notificationTrigger.getUniqueId(),
-    backupTriggerId: backupTrigger.getUniqueId()
+    backupTriggerId: backupTrigger.getUniqueId(),
+    mlitNightlyTriggerId: mlitNightlyTrigger.getUniqueId(),
+    mlitPreNotificationTriggerId: mlitPreNotificationTrigger.getUniqueId()
   };
 }

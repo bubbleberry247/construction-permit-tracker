@@ -16,24 +16,30 @@ var ROLE_CAPABILITIES_ = {
   master_editor: [
     'session.read', 'dashboard.read',
     'companies.read', 'companies.edit_contacts',
-    'notifications.review', 'notifications.send'
+    'notifications.review', 'notifications.send',
+    'mlit.read', 'mlit.request_refresh', 'mlit.apply_diff'
   ],
   operations_admin: [
     'session.read', 'dashboard.read',
     'companies.read', 'companies.edit_contacts', 'companies.revert',
     'notifications.review', 'notifications.send',
+    'mlit.read', 'mlit.request_refresh', 'mlit.apply_diff', 'mlit.configure',
+    'companies.manage_monitoring',
     'operations.read', 'operations.write',
     'users.read', 'users.write', 'schema.migrate'
   ],
   technical_admin: [
     'session.read', 'dashboard.read', 'companies.read',
-    'notifications.review', 'operations.read', 'schema.migrate'
+    'notifications.review', 'mlit.read', 'mlit.request_refresh',
+    'operations.read', 'schema.migrate'
   ],
   // Phase 0-Cの非公開移行時だけ使用する後方互換role。公開前に必ず解消する。
   legacy_admin: [
     'session.read', 'dashboard.read',
     'companies.read', 'companies.edit_contacts', 'companies.revert',
     'notifications.review', 'notifications.send',
+    'mlit.read', 'mlit.request_refresh', 'mlit.apply_diff', 'mlit.configure',
+    'companies.manage_monitoring',
     'operations.read', 'operations.write',
     'users.read', 'users.write', 'schema.migrate'
   ]

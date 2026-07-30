@@ -1,183 +1,62 @@
-# 建設業許可証管理システム (construction-permit-tracker)
+# 建設業許可証管理システム
 
-## システム概要
+## 現行スコープ
 
-Google Sheets + Google Forms + Google Apps Script で構成する建設業許可証の期限管理システムです。
-協力会社からフォームで許可証PDFを受領し、満了日に応じた自動通知・ステータス管理を行います。
+Google Apps Script WebアプリとGoogle Sheetsで、会社連絡先・建設業許可期限・MLIT公表情報・通知候補を管理します。協力会社からのシステム受付は行いません。
 
-## アーキテクチャ
+- 客先担当者はWeb画面から会社連絡先だけを更新する
+- `Companies`の直接編集、客先担当者による会社追加・削除・会社名変更は行わない
+- `Companies`を管理対象と連絡先の正本、`Permits`を承認済み許可期限の正本とする
+- `MLITPermits`はMLIT観測値と差分確認状態を保持し、`Permits`を自動上書きしない
+- 通知は`NotificationQueue`で担当者が確認し、中央送信ゲートを通ったものだけ送る
 
-- **Google Forms** — 協力会社が許可証PDF・情報を提出する入口
-- **Google Drive** — 許可証PDFファイルを会社別フォルダで保管
-- **Google Sheets** — Companies / Permits / Submissions / Notifications / Config の5シートで全データ管理
-- **Google Apps Script** — フォーム受信処理・日次通知バッチ・メール送信をサーバーレスで実行
-- **Gmail** — 通知メール・受領確認メール・週次サマリーの送信
+## 主要シート
 
-## セットアップ手順
+| シート | 役割 |
+|---|---|
+| `Companies` | 会社ID、業者番号、連絡先、管理対象フラグ、version |
+| `Permits` | 承認済み許可情報と`permit_data_version` |
+| `MLITPermits` | MLIT観測、成功・失敗日時、再試行、差分状態 |
+| `NotificationQueue` | 未送信候補、会社・許可version、期限、状態 |
+| `Notifications` | 送信予約・送信結果と冪等キー |
+| `UserAccess` | サーバー側roleと外部送信権限 |
+| `AuditLog` | 認証、更新、差分反映、送信、設定変更の監査 |
 
-### 事前準備
+## 認証と安全停止
 
-- [ ] Google アカウント（G Suite / Google Workspace 推奨）
-- [ ] 上記アカウントで Gmail が利用可能であること
+- Google ID tokenをサーバーで検証し、roleは`UserAccess`から決定する
+- 公開サーバー関数は`doGet`と`apiDispatch`だけ
+- `ENABLE_SEND=TRUE`かつ通知mode・権限・宛先・version・MLIT鮮度・quotaの全条件を満たさない限り送信しない
+- MLIT確認modeは`OFF`、`SHADOW`、`MANUAL_APPLY`だけ
+- 本番の会社マスタ127社照合と孤立参照0件が確認できるまで公開・トリガー作成を行わない
 
-### Step 1 — Google Drive にルートフォルダを作成
+## MLIT確認と通知フロー
 
-- [ ] Google Drive を開き、許可証PDFを保管するフォルダを新規作成（例: `建設業許可証`）
-- [ ] フォルダを開き、URL の `folders/` 以降の文字列をコピーして **DRIVE_ROOT_FOLDER_ID** として控える
-  - 例: `https://drive.google.com/drive/folders/1AbCdEfGh...` → `1AbCdEfGh...` の部分
+1. 毎日3時台に、管理対象の`Companies + Permits`から古い許可を最大25件確認する
+2. 毎日7時台に、通知対象となる許可だけを送信前確認する
+3. 一致時は観測成功日時だけを更新する
+4. 期限差分、商号不一致、複数候補、3回連続NOT_FOUNDは確認待ちにする
+5. 担当者が差分を承認した場合だけ`Permits`を更新し、関連通知候補を`STALE`にする
+6. 8時台に通知候補を生成し、初期運用では担当者が最大10件ずつ確認して送る
 
-### Step 2 — Google Sheets を新規作成
+会社詳細の「MLITを再確認」は即時外部照会ではなく、次のMLIT処理枠への優先予約です。画面の「最終成功確認日時」はMLIT公表情報を取得できた時刻であり、行政側の公表遅延までは保証しません。
 
-- [ ] Google Sheets で新規スプレッドシートを作成（例: `建設業許可証管理`）
-- [ ] Apps Script を開く: メニュー「拡張機能」→「Apps Script」
-- [ ] **Step 4** のコードをコピーしてから、メニュー「許可証管理」→「シートヘッダ初期化」を実行
-- [ ] Configシートに設定値を入力（下記「Config シート設定値」参照）
+## 開発と検証
 
-### Step 3 — Google Form を作成・設定
-
-- [ ] Google Forms で新規フォームを作成（例: `建設業許可証 提出フォーム`）
-- [ ] 以下の項目を追加（項目名を正確に合わせること）:
-
-| 項目名 | 種別 | 必須 |
-|--------|------|------|
-| 協力会社名 | テキスト | 必須 |
-| 担当者名 | テキスト | 必須 |
-| 通知先メール | テキスト | 必須 |
-| 許可番号 | テキスト | 必須 |
-| 許可区分（知事/大臣） | ラジオ（知事/大臣） | 必須 |
-| 一般/特定 | ラジオ（一般/特定） | 必須 |
-| 許可業種 | テキスト | 必須 |
-| 許可年月日 | テキスト（YYYY/MM/DD） | 必須 |
-| 満了日 | テキスト（YYYY/MM/DD） | 必須 |
-| 許可証PDF | ファイルアップロード（PDF） | 必須 |
-| 更新申請受付票PDF | ファイルアップロード（PDF） | 任意 |
-| 備考 | テキスト（段落） | 任意 |
-
-- [ ] フォームの URL から **FORM_ID** を控える
-  - 例: `https://docs.google.com/forms/d/1XyZ.../viewform` → `1XyZ...` の部分
-
-### Step 4 — Apps Script にコードをコピー
-
-- [ ] スプレッドシートのメニュー「拡張機能」→「Apps Script」を開く
-- [ ] プロジェクト名を設定（例: `建設業許可証管理`）
-- [ ] `appsscript.json` の内容をマニフェストに貼り付け（「プロジェクトの設定」→「マニフェストファイルをエディタで表示」）
-- [ ] 以下の `.gs` ファイルを新規ファイルとして作成し、それぞれコードを貼り付ける:
-  - `Config.gs`
-  - `Utils.gs`
-  - `Models.gs`
-  - `FormHandler.gs`
-  - `Scheduler.gs`
-  - `Mailer.gs`
-  - `Ui.gs`
-
-### Step 5 — スクリプトの承認・トリガー設定
-
-- [ ] Apps Script エディタで「実行」→「関数を実行」→ `onOpen` を実行し、OAuth 承認を完了する
-- [ ] スプレッドシートに戻りリロードすると「許可証管理」メニューが表示される
-- [ ] 「許可証管理」→「設定チェック」で全キーが OK であることを確認
-- [ ] トリガーを設定:
-  - `runDailyNotifications`: 時間主導型 → 毎日（例: 午前8時〜9時）
-  - `onFormSubmit`: フォーム送信時（フォームを選択）
-
----
-
-## シートヘッダ（コピペ用）
-
-### Config シート
-```
-key	value	description
+```bash
+npm install
+npm run test:gas
+python -m pytest tests/test_master_reconciliation.py -q
 ```
 
-### Companies シート
-```
-company_id	company_name	representative_name	contact_person	contact_email	contact_email_cc	phone	status	created_at	updated_at
-```
+`npm run push`、deployment作成、`installManagedTriggers_`実行、`ENABLE_SEND`変更は、本番移行ゲートの承認後に別手順で行います。
 
-### Permits シート
-```
-permit_id	company_id	permit_number	governor_or_minister	general_or_specific	permit_type_code	trade_categories	issue_date	expiry_date	renewal_deadline_date	status	last_received_date	last_checked_date	evidence_renewal_application	evidence_file_url	permit_file_url	permit_file_drive_id	permit_file_version	note	created_at	updated_at
-```
+## 主要ディレクトリ
 
-### Submissions シート
-```
-submission_id	submitted_at	company_name_raw	contact_email_raw	permit_number_raw	expiry_date_raw	uploaded_file_drive_id	uploaded_file_url	parsed_result	error_message
-```
-
-### Notifications シート
-```
-notification_id	sent_at	company_id	permit_id	to_email	cc_email	stage	subject	body	result	error_message
-```
-
----
-
-## Config シート設定値
-
-| key | value（例） | 説明 |
-|-----|-------------|------|
-| ADMIN_EMAILS | admin@example.com,manager@example.com | 管理者メールアドレス（カンマ区切り） |
-| DRIVE_ROOT_FOLDER_ID | 1AbCdEfGhIjKlMnOpQrStUvWx | 許可証PDF保管フォルダのID |
-| FORM_ID | 1XyZaBcDeFgHiJkLmNoPqRsTuV | Google Form のID |
-| NOTIFY_STAGES_DAYS | 120,90,60,45,30,14,0 | 通知するステージ（満了日までの日数、カンマ区切り） |
-| RUN_TIMEZONE | Asia/Tokyo | タイムゾーン |
-| ENABLE_SEND | true | メール送信の有効化（false でドライラン） |
-| GMAIL_DAILY_LIMIT | 150 | Gmail日次送信上限（デフォルト150件） |
-
----
-
-## 通知ステージ仕様
-
-| ステージ | 満了日までの日数 | 送信先 | 内容 |
-|----------|-----------------|--------|------|
-| 120 | 約120日前 | 協力会社 | 更新準備の開始依頼 |
-| 90 | 約90日前 | 協力会社 | 申請手続き開始・受付票提出依頼 |
-| 60 | 約60日前 | 協力会社 | 進捗確認・受付票提出依頼 |
-| 45 | 約45日前 | 協力会社 | 受付票未提出の場合は至急対応 |
-| 30 | 約30日前 | 協力会社 + 管理者 | 最終警告・発注/入場への影響を警告 |
-| 14 | 約14日前 | 協力会社 + 管理者 | 発注停止予告 |
-| 0 | 満了当日 | 協力会社 + 管理者 | 満了日通知 |
-| EXPIRED | 満了日超過 | 協力会社 + 管理者 | 期限切れ通知 |
-
-- ステージ判定は ±1日の許容範囲あり（日次バッチ実行時刻のずれを吸収）
-- 同一 permit_id + stage の SENT レコードが既存の場合は再送しない
-
----
-
-## Permit ステータス一覧
-
-| ステータス | 意味 |
-|------------|------|
-| VALID | 有効（満了まで30日超） |
-| EXPIRING | 期限接近（満了まで30日以内） |
-| RENEWAL_IN_PROGRESS | 更新申請中（受付票提出済み・満了日超過） |
-| EXPIRED | 期限切れ（受付票未提出・満了日超過） |
-
----
-
-## 想定トラブルと対処
-
-- **「Configシートが見つかりません」エラー**: 「許可証管理」→「シートヘッダ初期化」を実行してシートを作成してください
-- **フォーム送信後にSubmissionsにNGが記録される**: Submissionsの error_message 列を確認し、ADMIN_EMAILS に送られたエラーメールも参照してください
-- **メールが届かない**: ENABLE_SEND=true になっているか確認。Notifications の result 列が DRY_RUN になっていれば false になっています
-- **Gmail送信上限に達した**: 大量の許可証が同時期に期限を迎えている場合に発生します。ADMIN_EMAILSにアラートが届きます。翌日以降に自動で送信されます。上限はConfigシートの `GMAIL_DAILY_LIMIT`（デフォルト150件）で変更可能です
-- **トリガーが実行されない**: Apps Script の「トリガー」画面で runDailyNotifications の設定を確認してください
-- **DriveApp.getFileById エラー**: フォームのファイルアップロード権限とDriveのアクセス権を確認してください
-- **onFormSubmit が動作しない**: トリガーがフォーム送信時に設定されているか確認。Apps Script のダッシュボードで実行ログを確認してください
-
----
-
-## ディレクトリ構成
-
-<!-- AUTO-GENERATED: directory table -->
-| ディレクトリ | README | 概要 |
-|-------------|--------|------|
-| [`src/`](src/README.md) | [README](src/README.md) | バックエンドPythonコード一式（パイプライン・GAS・FastAPI） |
-| [`src/app/`](src/app/README.md) | [README](src/app/README.md) | FastAPI Webダッシュボード（ルーター・テンプレート・静的ファイル） |
-| [`src/app/routers/`](src/app/routers/README.md) | [README](src/app/routers/README.md) | FastAPI ルーター群（companies / dashboard / images / pages） |
-| [`src/utils/`](src/utils/README.md) | [README](src/utils/README.md) | 共通ユーティリティ（OCR後処理・日本語正規化・和暦変換） |
-| [`tests/`](tests/README.md) | [README](tests/README.md) | ユニットテスト・OCRベンチマーク |
-| [`docs/`](docs/README.md) | [README](docs/README.md) | システム設計・運用ルールドキュメント |
-| [`plans/`](plans/README.md) | [README](plans/README.md) | AIレビュー依頼・設計提案・修正計画 |
-| [`policy/`](policy/README.md) | [README](policy/README.md) | マスタデータ不変条件定義（機械可読ポリシー） |
-| [`scripts/`](scripts/README.md) | [README](scripts/README.md) | Windowsタスクスケジューラ・パイプライン実行バッチ |
-| `logs/` | — | MCP Puppeteer 実行ログ（自動生成・コミット対象外） |
-<!-- END AUTO-GENERATED -->
+| ディレクトリ | 内容 |
+|---|---|
+| `src/` | GAS、Python処理、Webアプリ |
+| `tests/` | GAS安全テスト、MLIT同期テスト、マスタ照合テスト |
+| `docs/` | 設計、レビュー、本番証跡 |
+| `plans/` | 設計・移行計画 |
+| `policy/` | データ不変条件 |

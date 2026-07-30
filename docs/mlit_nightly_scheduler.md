@@ -1,150 +1,76 @@
-# MLIT 毎晩ローリング再確認 - GAS Time-driven Trigger 設定手順
+# MLIT定期確認・送信前確認 運用手順
 
-## 概要
+更新日: 2026-07-30
 
-GAS Web App の `runDailyMlitRolling()` を毎日 02:00 に起動し、
-MLITPermits シートの許可情報をローリング再確認する。
+## 現在の状態
 
-- 1 日あたり 5 件処理（GAS 内部で約 30〜60 秒）
-- 145 社を約 29 日で 1 巡
-- `last_synced` が 30 日以上前 or 空の `fetch_status='OK'` 行が優先対象
-- **ローカル PC は不要**（GAS = Google Apps Script はクラウドで動く）
+本番はdeployment v24、公開範囲`MYSELF`、インストール型トリガー0件です。127社照合、UAT、schema移行が完了するまでトリガーを作成しません。
 
-## 設計の根拠（GPT-5.4 レビュー反映済み + Path A 採用）
+## データ責任
 
-| 観点 | 採用方針 |
-|------|----------|
-| アーキテクチャ | **Sheets 一本化**（GAS が直接 MLIT 連携、ローカル DB 経由しない） |
-| データソース | `MLITPermits` シート（fetch_status / last_synced あり） |
-| MLIT 連携 | `MlitSearch.gs` の既存 `searchMlitPermit_` / `fetchMlitDetail_`（UrlFetchApp） |
-| MLIT 規約 | 1件ごとに `Utilities.sleep(3000)` 待機（既存 `searchMlit_` と同じ） |
-| kill switch | ScriptProperties の `MLIT_ROLLING_PAUSE='true'` で即停止 |
-| 同時実行制御 | `LockService.getScriptLock()` で多重起動防止（60秒待機） |
-| 失敗ログ | GAS 標準ログ（Stackdriver）+ `AuditLog` シートに `MLIT_ROLLING` アクション追記 |
+- `Companies`: 管理対象の正本。`permit_monitoring_enabled=TRUE`だけを確認する
+- `Permits`: 承認済み期限の正本。通知計算はこの期限だけを使う
+- `MLITPermits`: MLIT観測値、成功・失敗日時、再試行、差分確認状態
 
-## time-driven trigger の登録手順（GAS エディタ）
+MLIT確認は`Companies + Permits`から対象を作り、観測行がなければ`MLITPermits`へseedします。MLIT観測は`Permits`を自動上書きしません。
 
-1. ブラウザで [対象スプレッドシート](https://docs.google.com/spreadsheets/d/1FEj9OOz_NsFCDPd5eiYLrawB9x_Y5BI6cKOI3rtZlwA/edit) を開く
-2. メニュー: **拡張機能** → **Apps Script**
-3. 左サイドバー: **トリガー（時計アイコン）**
-4. 右下: **+ トリガーを追加**
-5. 設定:
-   - 実行する関数: `runDailyMlitRolling`
-   - イベントのソース: `時間主導型`
-   - 時間ベースのトリガーのタイプ: `日付ベースのタイマー`
-   - 時刻: `午前2時〜3時`
-   - エラー通知設定: `今すぐ通知を受け取る`（推奨）
-6. **保存**
-7. 初回は OAuth スコープの承認が必要（UrlFetchApp / Spreadsheets / Properties）
+## mode
 
-### または GAS 内のコードで登録
+| mode | 動作 |
+|---|---|
+| `OFF` | 外部MLIT確認を行わない |
+| `SHADOW` | MLIT観測と差分記録だけを行う |
+| `MANUAL_APPLY` | SHADOWに加え、担当者が確認した差分だけ`Permits`へ反映可能 |
 
-```javascript
-// Apps Script エディタから手動実行
-function setupMlitRollingTrigger() {
-  // 既存の同名トリガーを削除
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'runDailyMlitRolling') {
-      ScriptApp.deleteTrigger(t);
-    }
-  });
-  ScriptApp.newTrigger('runDailyMlitRolling')
-    .timeBased()
-    .atHour(2)
-    .everyDays(1)
-    .create();
-}
-```
+modeはoperations_adminがWeb管理画面で1段階ずつ変更します。自動反映modeは実装していません。
 
-## 設定値の上書き（任意）
+## 管理トリガー
 
-ScriptProperties に以下を設定すると、コード変更なしで挙動変更できる:
+承認後にApps Scriptエディタから`installManagedTriggers_()`を1回だけ実行します。個別トリガーを手作業で追加しません。
 
-| Key | デフォルト | 意味 |
+| 時刻台 | handler | 内容 |
 |---|---|---|
-| `MLIT_ROLLING_DAILY_LIMIT` | `5` | 1回の実行で再確認する最大件数 |
-| `MLIT_ROLLING_MAX_STALE_DAYS` | `30` | 最終同期からこの日数以上経過した行を対象 |
-| `MLIT_ROLLING_PAUSE` | `(未設定)` | `true` で即時停止（kill switch） |
+| 2時 | `runDailyBackup_` | 日次・月次バックアップ |
+| 3時 | `runDailyMlitRolling_` | 全管理対象を約7日で一巡 |
+| 7時 | `runPreNotificationMlitRefresh_` | 当日通知対象を送信前確認 |
+| 8時 | `runDailyNotifications_` | 通知候補生成と許可status更新 |
 
-設定方法: GAS エディタ → プロジェクトの設定（歯車アイコン）→ スクリプトプロパティ
+通常確認は`ceil(管理対象許可数÷7)+2`件、最大25件です。優先予約、成功確認なし、再試行、成功日時の古い順に処理します。1件ごとのMLIT通信は共通rate limiterを通ります。
 
-または GAS コードから:
+## 担当者の手動再確認
 
-```javascript
-PropertiesService.getScriptProperties().setProperty('MLIT_ROLLING_DAILY_LIMIT', '10');
-```
+会社詳細の「MLITを再確認」は同期照会ではありません。同一許可の`refresh_requested_at`を更新し、次の3時または7時の処理枠で優先します。連絡先だけを保存した場合は予約しません。
 
-## 動作確認
+## 失敗時の扱い
 
-### 候補選択を確認（dry-run 相当、MLIT は叩かない）
-
-GAS エディタで `debugPickMlitRollingCandidates` を選んで実行:
-
-```
-（実行ログ）
-候補数: 5
-1: C0008 国土交通大臣 22214 last_synced=2026-03-30 02:30:04
-2: C0011 愛知県知事 25392 last_synced=2026-03-30 02:30:04
-...
-```
-
-### 1件だけ手動再確認
-
-GAS エディタで `debugRefreshOneByCompanyId` を選び、エディタ内で `debugRefreshOneByCompanyId('C0011')` のような形で実行（コード変更や別関数経由）。
-
-### バッチ全体を即時実行（trigger を待たない）
-
-GAS エディタで `runDailyMlitRolling` を選んで実行 → ログで処理状況を確認。
-
-### kill switch テスト
-
-```javascript
-// エディタから一時停止
-pauseMlitRolling();
-// runDailyMlitRolling() を実行 → 何もせず終了することを確認
-runDailyMlitRolling();
-// 解除
-resumeMlitRolling();
-```
+- 通信・HTTP・解析失敗: `last_attempted_at`更新、指数backoff、正本維持
+- `last_success_at`と旧互換`last_synced`: MLIT取得と解析が成功した時だけ更新
+- NOT_FOUND: 3回連続で初めて`PENDING_REVIEW`
+- 複数候補・商号不一致・不正日付: 自動反映せず確認待ち
+- 期限差分: `MLITPermits`へ記録し、通知送信を停止
 
 ## 緊急停止
 
-MLIT サイトに迷惑をかけている疑いがある場合、GAS エディタから:
+1. Web管理画面で`MLIT_SYNC_MODE=OFF`
+2. 必要ならScript Propertiesの`MLIT_ROLLING_PAUSE=true`
+3. 異常実行が残る場合だけ対象トリガーを停止
+4. Apps Script実行ログ、`MLITPermits`、`AuditLog`を保全
 
-```javascript
-pauseMlitRolling();
-```
+`ENABLE_SEND`と通知modeはメール用の独立kill switchです。MLIT停止だけでメール送信許可にはなりません。
 
-または、プロジェクトの設定 → スクリプトプロパティで `MLIT_ROLLING_PAUSE` を `true` に設定。
+## 監視
 
-このフラグが立っている間:
-- `runDailyMlitRolling` は起動しても何もせず終了
-- ループ内（5件処理中）でも各イテレーション冒頭で再チェック → 即停止
-- 既存の `runDailyNotifications` 等の他バッチには影響しない
+- `last_success_at`が7日超または空の件数
+- `PENDING_REVIEW`の件数と最古`diff_detected_at`
+- `consecutive_failure_count`、`consecutive_not_found_count`
+- `refresh_requested_at`が残る件数
+- `MLIT_SYNC_BATCH`監査のpicked件数、結果内訳、ABORTED
+- 通知対象の成功確認が送信時点で24時間以内か
 
-再開: `resumeMlitRolling()` または `MLIT_ROLLING_PAUSE` プロパティを削除
+## 本番開始前の確認
 
-## 監視ポイント
-
-- **AuditLog シート**: `action='MLIT_ROLLING'` の行が毎日追加されるはず
-  - `details` 列に `picked=N 一致=A 不一致=B 確認不可=C` の形で結果記録
-- **GAS ログ（Stackdriver）**: 例外があれば `Logger.log` で記録
-- **MLITPermits シート**: `last_synced` が日々更新されているか
-- 30 日経っても巡回が完了しない会社が出たら `MLIT_ROLLING_DAILY_LIMIT` を増やす
-
-## 関連ファイル
-
-- `src/MlitRolling.gs` — 本機能の本体（runDailyMlitRolling, refreshOneMlitPermit_）
-- `src/MlitSearch.gs` — MLIT 通信の下回り（searchMlitPermit_, fetchMlitDetail_）
-- `src/Scheduler.gs` — 他の日次バッチ（通知）
-- `src/db.gs` — 汎用 CRUD（readRecords_, updateRecord_, writeAuditLog_）
-
-## ローカル Python 側の扱い
-
-`src/mlit_confirm.py --rolling` および `scripts/nightly_mlit_rolling.bat`、
-Windows Task Scheduler の `MLIT_Nightly_Rolling` タスクは **本機能で代替され不要**。
-
-別タスクで以下を実施予定:
-- Windows Task Scheduler の `MLIT_Nightly_Rolling` を削除
-- `mlit_confirm.py --rolling` 関連コードを「初期セットアップ専用」に降格、または削除
-- FastAPI の 🔄 MLITで最新化ボタンを除去（運用画面ではないため不要）
+- 127社照合承認、permit孤立参照0件
+- `permit_monitoring_enabled`の対象会社を運用承認
+- 複製Sheetと別deploymentでSHADOW UAT
+- 商号不一致、複数候補、NOT_FOUND、日付異常の正本非破壊テスト
+- 前deploymentへのコードロールバックとバックアップ復旧の実演

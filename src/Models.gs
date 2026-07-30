@@ -1,6 +1,6 @@
 /**
  * Models.gs — スプレッドシートへのデータアクセス層
- * Companies / Permits / Submissions / Notifications
+ * Companies / Permits / Notifications
  */
 
 var HEADER_ROW = 1;
@@ -201,7 +201,8 @@ var PERMITS_HEADERS = [
   'permit_file_path', 'permit_file_share_url', 'permit_file_version', 'evidence_file_path',
   'last_received_date', 'source_file', 'source_file_hash',
   'parse_status', 'error_category', 'error_reason',
-  'note', 'created_at', 'updated_at'
+  'note', 'created_at', 'updated_at',
+  'permit_data_version'
 ];
 
 var PermitsModel = {
@@ -261,6 +262,7 @@ var PermitsModel = {
     data.evidence_renewal_application = data.evidence_renewal_application || false;
     data.parse_status = data.parse_status || 'OK';
     data.permit_file_version = data.permit_file_version || 1;
+    data.permit_data_version = data.permit_data_version || 1;
     data.created_at = now;
     data.updated_at = now;
     appendRow_(sheet, PERMITS_HEADERS, data);
@@ -284,60 +286,12 @@ var PermitsModel = {
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
     return rows.filter(function(r) {
-      return String(r.current_status).toUpperCase() !== 'EXPIRED';
+      // EXPIREDは期限切れ通知と更新後期限の検出対象なので除外しない。
+      // 管理を終えた許可だけを明示的な終端statusで除外する。
+      return ['CANCELLED', 'SUPERSEDED', 'DELETED'].indexOf(
+        String(r.current_status || '').toUpperCase()
+      ) < 0;
     });
-  }
-};
-
-// ─────────────────────────────────────────────────
-// SubmissionsModel
-// ─────────────────────────────────────────────────
-
-var SUBMISSIONS_HEADERS = [
-  'submission_id', 'trigger_uid', 'submitted_at', 'company_name_raw', 'contact_email_raw',
-  'permit_number_raw', 'expiry_date_raw', 'uploaded_file_drive_id',
-  'uploaded_file_url', 'parsed_result', 'error_message'
-];
-
-var SubmissionsModel = {
-  getSheet: function() {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Submissions');
-    if (!sheet) throw new Error('Submissionsシートが見つかりません');
-    return sheet;
-  },
-
-  create: function(data) {
-    var sheet = this.getSheet();
-    data.submission_id = data.submission_id || generateUuid_();
-    data.submitted_at = data.submitted_at || new Date();
-    appendRow_(sheet, SUBMISSIONS_HEADERS, data);
-    return data;
-  },
-
-  findByTriggerUid: function(triggerUid) {
-    var sheet = this.getSheet();
-    var rows = sheetToObjects_(sheet);
-    for (var i = 0; i < rows.length; i++) {
-      if (String(rows[i].trigger_uid) === String(triggerUid)) {
-        return rows[i];
-      }
-    }
-    return null;
-  },
-
-  /**
-   * 指定 submission_id の行を更新する（parsed_result/error_message修正用）
-   */
-  updateById: function(submissionId, data) {
-    var sheet = this.getSheet();
-    var rows = sheetToObjects_(sheet);
-    for (var i = 0; i < rows.length; i++) {
-      if (String(rows[i].submission_id) === String(submissionId)) {
-        updateRow_(sheet, rows[i]._row, SUBMISSIONS_HEADERS, data);
-        return true;
-      }
-    }
-    return false;
   }
 };
 

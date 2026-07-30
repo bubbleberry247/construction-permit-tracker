@@ -11,6 +11,10 @@ var API_ACTIONS_ = {
     capability: 'companies.edit_contacts',
     handler: apiCompaniesUpdateContacts_
   },
+  'companies.updateMonitoring': {
+    capability: 'companies.manage_monitoring',
+    handler: apiCompaniesUpdateMonitoring_
+  },
   'companies.revertChange': {
     capability: 'companies.revert',
     handler: apiCompaniesRevertChange_
@@ -35,6 +39,22 @@ var API_ACTIONS_ = {
     capability: 'notifications.review',
     handler: apiNotificationsRegenerate_
   },
+  'mlit.listDiffs': {
+    capability: 'mlit.read',
+    handler: apiMlitListDiffs_
+  },
+  'mlit.requestRefresh': {
+    capability: 'mlit.request_refresh',
+    handler: apiMlitRequestRefresh_
+  },
+  'mlit.applyDiff': {
+    capability: 'mlit.apply_diff',
+    handler: apiMlitApplyDiff_
+  },
+  'mlit.dismissDiff': {
+    capability: 'mlit.apply_diff',
+    handler: apiMlitDismissDiff_
+  },
   'operations.getStatus': {
     capability: 'operations.read',
     handler: apiOperationsGetStatus_
@@ -42,6 +62,10 @@ var API_ACTIONS_ = {
   'operations.setNotificationMode': {
     capability: 'operations.write',
     handler: apiOperationsSetNotificationMode_
+  },
+  'operations.setMlitMode': {
+    capability: 'mlit.configure',
+    handler: apiOperationsSetMlitMode_
   },
   'operations.ensureSchema': {
     capability: 'schema.migrate',
@@ -180,6 +204,10 @@ function apiCompaniesUpdateContacts_(payload, user, requestId) {
   return updateCompanyContactsSecure_(payload, user, requestId);
 }
 
+function apiCompaniesUpdateMonitoring_(payload, user, requestId) {
+  return updateCompanyMonitoringSecure_(payload, user, requestId);
+}
+
 function apiCompaniesRevertChange_(payload, user, requestId) {
   return revertCompanyChangeSecure_(payload, user, requestId);
 }
@@ -205,12 +233,32 @@ function apiNotificationsRegenerate_(payload, user, requestId) {
   return regenerateNotificationCandidate_(payload, user, requestId);
 }
 
+function apiMlitListDiffs_(payload, user) {
+  return listMlitDiffsSecure_(payload, user);
+}
+
+function apiMlitRequestRefresh_(payload, user, requestId) {
+  return requestMlitRefreshSecure_(payload, user, requestId);
+}
+
+function apiMlitApplyDiff_(payload, user, requestId) {
+  return applyMlitExpiryDiffSecure_(payload, user, requestId);
+}
+
+function apiMlitDismissDiff_(payload, user, requestId) {
+  return dismissMlitExpiryDiffSecure_(payload, user, requestId);
+}
+
 function apiOperationsGetStatus_(payload, user) {
   return getOperationsStatus_(payload, user);
 }
 
 function apiOperationsSetNotificationMode_(payload, user, requestId) {
   return setNotificationModeSecure_(payload, user, requestId);
+}
+
+function apiOperationsSetMlitMode_(payload, user, requestId) {
+  return setMlitSyncModeSecure_(payload, user, requestId);
 }
 
 function apiOperationsEnsureSchema_(payload, user, requestId) {

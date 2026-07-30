@@ -1,428 +1,593 @@
 /**
- * MlitRolling.gs — MLITPermits の許可情報を毎日少量ずつローリング再確認する。
+ * MlitRolling.gs — Companies/Permitsを起点にしたMLIT定期観測
  *
- * 設計（GPT-5.4 レビュー2回反映済み）:
- *   - データソース: MLITPermits シート（fetch_status / last_synced 列あり）
- *   - 再確認対象: MANUAL_FETCH_STATUSES_ 以外の行で last_synced 古いもの優先
- *   - 巡回粒度: 1日 DAILY_LIMIT 件（既定 5）。145社÷5=29日で1巡
- *   - 起点: time-driven trigger（毎日 02:00 等）
- *   - 結果書き戻し: 更新前に authority + permit_number で行を **再解決**してから updateRecord_
- *   - kill switch: ScriptProperties の MLIT_ROLLING_PAUSE='true' で即停止
- *   - レート制限: MlitRateLimit.gs:withMlitRateLimit_ で機能横断シリアライズ（3秒間隔）
- *
- * GPT-5.4 レビュー反映点:
- *   #1 失敗時の終端化バグ防止: 一時失敗（network/HTML差分）は fetch_status を変えず last_synced のみ更新
- *      → 次回 stale 判定で再対象になり自然リトライ
- *   #2 _row 誤行更新防止: refreshOneMlitPermit_ 内の updateRecord_ 直前に
- *      authority + permit_number で行を再解決
- *   #3 機能横断レート制御: withMlitRateLimit_ 経由で MLIT 呼び出し
- *
- * 関連ファイル:
- *   - MlitSearch.gs (searchMlitPermit_/fetchMlitDetail_)
- *   - MlitRateLimit.gs (withMlitRateLimit_)
- *   - Scheduler.gs (既存日次バッチ、別 trigger)
+ * MLITPermitsは観測値、Permitsは承認済み正本として分離する。
+ * 失敗時はlast_attempted_atだけを進め、last_success_at/last_syncedは変更しない。
  */
 
-// ---------------------------------------------------------------------------
-// 定数
-// ---------------------------------------------------------------------------
-
 var MLIT_ROLLING_DEFAULTS_ = {
-  DAILY_LIMIT: 8,        // 1回の実行で再確認する最大件数 (52社÷8=6.5日で1巡、週次達成)
-  MAX_STALE_DAYS: 7      // 最終同期からこの日数以上経過したものを対象 (週次更新化、2026-04-27 改修)
+  TARGET_CYCLE_DAYS: 7,
+  MAX_BATCH_SIZE: 25,
+  PRE_NOTIFICATION_LIMIT: 10,
+  MAX_STALE_DAYS: 7,
+  LEASE_SECONDS: 600
 };
 
 var MLIT_ROLLING_PAUSE_KEY_ = 'MLIT_ROLLING_PAUSE';
-
-/**
- * 候補から除外する fetch_status（人手介入で確定したもの）
- *
- * MANUAL_ENTRY: 手入力で確定した値（MLIT 検索失敗時の代替）
- * DUPLICATE_DELETE: 重複として削除マーク
- * PERSON_NAME_DELETE: 個人事業主削除マーク
- * （PERMIT_CORRECTED_SEE_ROW* は prefix チェックで別扱い）
- *
- * NOT_FOUND_AT_REFRESH / TRANSIENT_ERROR は **含めない**（再試行対象）
- */
-var MANUAL_FETCH_STATUSES_ = ['MANUAL_ENTRY', 'DUPLICATE_DELETE', 'PERSON_NAME_DELETE'];
-
-// ---------------------------------------------------------------------------
-// kill switch
-// ---------------------------------------------------------------------------
+var MLIT_JOB_LEASE_KEY_ = 'MLIT_JOB_LEASE';
 
 function isMlitRollingPaused_() {
-  var v = PropertiesService.getScriptProperties().getProperty(MLIT_ROLLING_PAUSE_KEY_);
-  return String(v || '').toLowerCase() === 'true';
+  var value = PropertiesService.getScriptProperties()
+    .getProperty(MLIT_ROLLING_PAUSE_KEY_);
+  return String(value || '').toLowerCase() === 'true';
 }
 
 function pauseMlitRolling_() {
-  PropertiesService.getScriptProperties().setProperty(MLIT_ROLLING_PAUSE_KEY_, 'true');
-  Logger.log('MLIT rolling は一時停止されました');
+  PropertiesService.getScriptProperties()
+    .setProperty(MLIT_ROLLING_PAUSE_KEY_, 'true');
 }
 
 function resumeMlitRolling_() {
-  PropertiesService.getScriptProperties().deleteProperty(MLIT_ROLLING_PAUSE_KEY_);
-  Logger.log('MLIT rolling は再開されました');
+  PropertiesService.getScriptProperties()
+    .deleteProperty(MLIT_ROLLING_PAUSE_KEY_);
 }
 
-// ---------------------------------------------------------------------------
-// 候補選択
-// ---------------------------------------------------------------------------
+function formatMlitTimestamp_(date) {
+  return Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
+}
 
-/**
- * 再確認対象の MLITPermits 行を優先度順で返す。
- *
- * 候補:
- *   - fetch_status が MANUAL_FETCH_STATUSES_ または PERMIT_CORRECTED_* で **ない**
- *     （= OK / NOT_FOUND_AT_REFRESH / TRANSIENT_ERROR / その他は再試行対象）
- *   - AND last_synced が空 or maxStaleDays 以上経過
- *
- * 並び順: last_synced 昇順（古いものから優先）
- *
- * @param {number} limit
- * @param {number} maxStaleDays
- * @return {Object[]} MLITPermits 行オブジェクト（_row 含む）
- */
+function addMlitRetryHours_(hours) {
+  return formatMlitTimestamp_(new Date(Date.now() + Number(hours || 1) * 3600000));
+}
+
+function getActiveMonitoredPermitPairs_() {
+  var companies = {};
+  readRecords_(SHEETS.Companies).forEach(function(company) {
+    if (isCompanyPermitMonitoringEnabled_(company)) {
+      companies[String(company.company_id || '')] = company;
+    }
+  });
+  return readRecords_(SHEETS.Permits).filter(function(permit) {
+    return !!companies[String(permit.company_id || '')] &&
+      isTrackablePermit_(permit);
+  }).map(function(permit) {
+    return {
+      permit: permit,
+      company: companies[String(permit.company_id || '')]
+    };
+  });
+}
+
+function seedMlitObservationsFromCanonical_() {
+  ensureHeaders_(getSheet_(SHEETS.MLITPermits), MLIT_PERMITS_HEADERS_);
+  var result = { scanned: 0, linked: 0, created: 0, skipped: 0 };
+  getActiveMonitoredPermitPairs_().forEach(function(pair) {
+    result.scanned++;
+    try {
+      var before = findMlitObservationForPermit_(pair.permit);
+      var observation = ensureMlitObservationForPermit_(pair.permit, pair.company);
+      if (!before && observation) result.created++;
+      else if (before && !String(before.permit_id || '').trim()) result.linked++;
+    } catch (error) {
+      result.skipped++;
+      logError_(
+        'MLIT観測seedスキップ permit_id=' + String(pair.permit.permit_id || ''),
+        error
+      );
+    }
+  });
+  return result;
+}
+
+function isMlitRetryDue_(observation, nowMs) {
+  var retryAt = parseStoredTimestamp_(observation.next_retry_at);
+  return !retryAt || retryAt.getTime() <= nowMs;
+}
+
+function getMlitCandidatePriority_(observation) {
+  if (String(observation.refresh_requested_at || '').trim()) return 0;
+  if (!String(observation.last_success_at || '').trim()) return 1;
+  if (Number(observation.consecutive_failure_count || 0) > 0 ||
+      Number(observation.consecutive_not_found_count || 0) > 0) return 2;
+  return 3;
+}
+
 function pickMlitRollingCandidates_(limit, maxStaleDays) {
-  var permits = readRecords_(SHEETS.MLITPermits);
-  var staleCutoffMs = Date.now() - maxStaleDays * 86400000;
-
-  var candidates = permits.filter(function(p) {
-    var st = String(p.fetch_status || '').trim();
-    if (MANUAL_FETCH_STATUSES_.indexOf(st) >= 0) return false;
-    if (st.indexOf('PERMIT_CORRECTED_') === 0) return false;
-
-    var ls = String(p.last_synced || '').trim();
-    if (!ls) return true; // 同期日不明は最優先で再確認
-    var d = new Date(ls);
-    if (isNaN(d.getTime())) return true;
-    return d.getTime() < staleCutoffMs;
+  seedMlitObservationsFromCanonical_();
+  var max = Number(limit);
+  if (!Number.isInteger(max) || max < 1) max = 1;
+  max = Math.min(max, MLIT_ROLLING_DEFAULTS_.MAX_BATCH_SIZE);
+  var staleDays = Number(maxStaleDays);
+  if (!Number.isFinite(staleDays) || staleDays < 0) {
+    staleDays = MLIT_ROLLING_DEFAULTS_.MAX_STALE_DAYS;
+  }
+  var nowMs = Date.now();
+  var staleCutoffMs = nowMs - staleDays * 86400000;
+  var activePermitIds = {};
+  getActiveMonitoredPermitPairs_().forEach(function(pair) {
+    activePermitIds[String(pair.permit.permit_id || '')] = true;
   });
-
+  var manualStatuses = ['MANUAL_ENTRY', 'DUPLICATE_DELETE', 'PERSON_NAME_DELETE'];
+  var candidates = readRecords_(SHEETS.MLITPermits).filter(function(observation) {
+    var permitId = String(observation.permit_id || '');
+    if (!permitId || !activePermitIds[permitId]) return false;
+    var fetchStatus = String(observation.fetch_status || '').trim().toUpperCase();
+    if (manualStatuses.indexOf(fetchStatus) >= 0 ||
+        fetchStatus.indexOf('PERMIT_CORRECTED_') === 0) return false;
+    if (!isMlitRetryDue_(observation, nowMs)) return false;
+    if (String(observation.refresh_requested_at || '').trim()) return true;
+    var lastSuccess = parseStoredTimestamp_(observation.last_success_at);
+    return !lastSuccess || lastSuccess.getTime() < staleCutoffMs;
+  });
   candidates.sort(function(a, b) {
-    var av = String(a.last_synced || '').trim();
-    var bv = String(b.last_synced || '').trim();
-    var ad = av ? new Date(av).getTime() : 0;
-    var bd = bv ? new Date(bv).getTime() : 0;
-    if (isNaN(ad)) ad = 0;
-    if (isNaN(bd)) bd = 0;
-    return ad - bd;
+    var priorityDiff = getMlitCandidatePriority_(a) - getMlitCandidatePriority_(b);
+    if (priorityDiff !== 0) return priorityDiff;
+    var aSuccess = parseStoredTimestamp_(a.last_success_at);
+    var bSuccess = parseStoredTimestamp_(b.last_success_at);
+    return (aSuccess ? aSuccess.getTime() : 0) - (bSuccess ? bSuccess.getTime() : 0);
   });
-
-  return candidates.slice(0, limit);
+  return candidates.slice(0, max);
 }
 
-// ---------------------------------------------------------------------------
-// 行再解決（_row 誤行更新防止）
-// ---------------------------------------------------------------------------
-
-/**
- * authority + permit_number で MLITPermits の行番号を再取得する。
- * 楽観ロックではなくシート手動編集対策（GPT-5.4 レビュー #2）。
- *
- * @param {string} authority
- * @param {string} permitNumber
- * @return {number}  1-indexed 行番号。見つからない場合は -1
- */
-function resolveMlitPermitRow_(authority, permitNumber) {
-  var auth = String(authority || '').trim();
-  var pnum = String(permitNumber || '').trim();
-  if (!auth || !pnum) return -1;
-
-  var permits = readRecords_(SHEETS.MLITPermits);
-  for (var i = 0; i < permits.length; i++) {
-    if (String(permits[i].authority).trim() === auth &&
-        String(permits[i].permit_number).trim() === pnum) {
-      return permits[i]._row;
+function resolveMlitPermitRow_(observation) {
+  var permitId = String(observation && observation.permit_id || '').trim();
+  var companyId = String(observation && observation.company_id || '').trim();
+  var authority = String(observation && observation.authority || '').trim();
+  var permitNumber = normalizePermitNumberForMlit_(
+    observation && observation.permit_number
+  );
+  var rows = readRecords_(SHEETS.MLITPermits);
+  for (var i = 0; i < rows.length; i++) {
+    if (permitId && String(rows[i].permit_id || '').trim() === permitId) {
+      return rows[i];
     }
   }
-  return -1;
+  for (var j = 0; j < rows.length; j++) {
+    if (String(rows[j].company_id || '').trim() === companyId &&
+        String(rows[j].authority || '').trim() === authority &&
+        normalizePermitNumberForMlit_(rows[j].permit_number) === permitNumber) {
+      return rows[j];
+    }
+  }
+  return null;
 }
 
-// ---------------------------------------------------------------------------
-// 1件再確認
-// ---------------------------------------------------------------------------
+function recordMlitAttempt_(observation, nowString) {
+  var current = resolveMlitPermitRow_(observation);
+  if (!current) return null;
+  updateRecord_(SHEETS.MLITPermits, current._row, {
+    last_attempted_at: nowString,
+    refresh_requested_at: '',
+    refresh_requested_by: '',
+    refresh_priority: ''
+  });
+  return resolveMlitPermitRow_(observation);
+}
 
-/**
- * 1件の MLITPermits 行を再確認して、結果を MLITPermits に書き戻す。
- *
- * 失敗パターンと fetch_status の扱い（GPT-5.4 レビュー #1 反映）:
- *   - 検索 throw: 一時障害。fetch_status は変えず last_synced 更新（次 stale で再試行）
- *   - 候補 0 件: 「以前 OK だったが今見つからない」。NOT_FOUND_AT_REFRESH に遷移するが
- *               候補抽出で除外されないので、stale で再試行されて復活も検出可能
- *   - 詳細 fetch throw: 一時障害。fetch_status 変えず last_synced 更新
- *   - 詳細 found=false: パース失敗。一時障害扱い、fetch_status 変えず last_synced 更新
- *   - 成功: fetch_status='OK' + 全フィールド更新
- *
- * @param {Object} permit  MLITPermits 行オブジェクト（候補抽出時のスナップショット）
- * @return {Object} {result: '一致'|'不一致'|'確認不可'|'スキップ', message: string}
- */
-function refreshOneMlitPermit_(permit) {
-  var authority = String(permit.authority || '').trim();
-  var permitNumber = String(permit.permit_number || '').trim();
-  var nowStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
+function recordMlitTransientFailure_(observation, errorCode, message, nowString) {
+  var current = resolveMlitPermitRow_(observation);
+  if (!current) return;
+  var failureCount = Number(current.consecutive_failure_count || 0) + 1;
+  var retryHours = Math.min(Math.pow(2, failureCount - 1), 24);
+  updateRecord_(SHEETS.MLITPermits, current._row, {
+    last_attempted_at: nowString,
+    next_retry_at: addMlitRetryHours_(retryHours),
+    consecutive_failure_count: failureCount,
+    fetch_status: 'TRANSIENT_ERROR',
+    last_error_code: String(errorCode || 'MLIT_ERROR'),
+    last_error_message: String(message || '').substring(0, 500),
+    refresh_requested_at: '',
+    refresh_requested_by: '',
+    refresh_priority: ''
+  });
+}
 
-  if (!authority || !permitNumber) {
-    return { result: '確認不可', message: 'authority/permit_number 欠損' };
+function recordMlitNotFound_(observation, nowString) {
+  var current = resolveMlitPermitRow_(observation);
+  if (!current) return { count: 0, pendingReview: false };
+  var count = Number(current.consecutive_not_found_count || 0) + 1;
+  var pendingReview = count >= 3;
+  var retryHours = count === 1 ? 1 : count === 2 ? 6 : 24;
+  var updates = {
+    last_attempted_at: nowString,
+    next_retry_at: addMlitRetryHours_(retryHours),
+    consecutive_failure_count: 0,
+    consecutive_not_found_count: count,
+    fetch_status: pendingReview ? 'NOT_FOUND_AT_REFRESH' : 'NOT_FOUND_RETRY',
+    last_error_code: 'NOT_FOUND',
+    last_error_message: 'MLIT検索結果が0件です（連続' + count + '回）',
+    refresh_requested_at: '',
+    refresh_requested_by: '',
+    refresh_priority: ''
+  };
+  if (pendingReview) {
+    updates.diff_status = 'PENDING_REVIEW';
+    updates.diff_detected_at = current.diff_detected_at || nowString;
+    updates.diff_type = 'NOT_FOUND';
+    updates.diff_risk_flags = 'MLIT_NOT_FOUND_3_TIMES';
+  }
+  updateRecord_(SHEETS.MLITPermits, current._row, updates);
+  return { count: count, pendingReview: pendingReview };
+}
+
+function recordMlitAmbiguousMatch_(observation, candidateCount, nowString) {
+  var current = resolveMlitPermitRow_(observation);
+  if (!current) return;
+  updateRecord_(SHEETS.MLITPermits, current._row, {
+    last_attempted_at: nowString,
+    next_retry_at: addMlitRetryHours_(24),
+    consecutive_failure_count: 0,
+    fetch_status: 'AMBIGUOUS_MATCH',
+    last_error_code: 'AMBIGUOUS_MATCH',
+    last_error_message: 'MLIT検索候補が' + candidateCount + '件あります',
+    refresh_requested_at: '',
+    refresh_requested_by: '',
+    refresh_priority: '',
+    diff_status: 'PENDING_REVIEW',
+    diff_detected_at: current.diff_detected_at || nowString,
+    diff_type: 'AMBIGUOUS_MATCH',
+    diff_risk_flags: 'MULTIPLE_MLIT_CANDIDATES'
+  });
+}
+
+function recordMlitSuccess_(observation, detail, nowString) {
+  var current = resolveMlitPermitRow_(observation);
+  if (!current) throw appError_('MLIT_ROW_MISSING', 'MLIT観測行が見つかりません', true);
+  var permit = findByKey_(SHEETS.Permits, 'permit_id', current.permit_id);
+  if (!permit) throw appError_('PERMIT_NOT_FOUND', '許可正本が見つかりません', false);
+  var observedExpiry = normalizeExpiryDateKey_(detail.expiryTo);
+  if (!observedExpiry) {
+    throw appError_('MLIT_EXPIRY_INVALID', 'MLITの有効期限を解釈できません', true);
+  }
+  var approvedExpiry = normalizeExpiryDateKey_(permit.expiry_date);
+  var difference = classifyMlitExpiryDifference_(approvedExpiry, observedExpiry);
+  var company = findByKey_(SHEETS.Companies, 'company_id', permit.company_id);
+  var approvedCompanyName = company
+    ? String(company.company_name_normalized || company.company_name_raw || '')
+    : String(permit.company_name_raw || '');
+  var observedCompanyName = String(detail.apiName || '').trim();
+  var identityMismatch = !!observedCompanyName && !!approvedCompanyName &&
+    normalizeMlitCompanyIdentity_(observedCompanyName) !==
+      normalizeMlitCompanyIdentity_(approvedCompanyName);
+  var previousObserved = normalizeExpiryDateKey_(
+    current.observed_expiry_date || current.expiry_date
+  );
+  var previousObservedCompanyName = String(current.observed_company_name || '').trim();
+  var previousDiffStatus = String(current.diff_status || 'NONE').toUpperCase();
+  var diffStatus = 'PENDING_REVIEW';
+  var diffDetectedAt = current.diff_detected_at || nowString;
+  if (difference.type === 'NONE' && !identityMismatch) {
+    diffStatus = 'NONE';
+    diffDetectedAt = '';
+  } else if (previousDiffStatus === 'DISMISSED' &&
+             previousObserved === observedExpiry &&
+             previousObservedCompanyName === observedCompanyName) {
+    diffStatus = 'DISMISSED';
+  } else if (previousObserved !== observedExpiry ||
+             previousObservedCompanyName !== observedCompanyName ||
+             previousDiffStatus !== 'PENDING_REVIEW') {
+    diffDetectedAt = nowString;
+  }
+  var riskFlags = difference.riskFlags.slice();
+  var diffType = difference.type;
+  if (identityMismatch) {
+    diffType = 'IDENTITY_MISMATCH';
+    riskFlags.push('COMPANY_NAME_MISMATCH');
   }
 
-  // 更新時に使う行番号は **再解決** する（候補時点の _row はシート編集でずれている可能性）
-  // ヘルパ: 失敗時の last_synced のみ更新
-  var updateLastSyncedOnly = function() {
-    var freshRow = resolveMlitPermitRow_(authority, permitNumber);
-    if (freshRow < 0) return false;
-    updateRecord_(SHEETS.MLITPermits, freshRow, { last_synced: nowStr });
-    return true;
+  var hasIppan = detail.tradesIppan && detail.tradesIppan.length > 0;
+  var hasTokutei = detail.tradesTokutei && detail.tradesTokutei.length > 0;
+  var category = hasIppan && hasTokutei ? '般特' : hasIppan ? '般' : hasTokutei ? '特' : '';
+  var allTrades = {};
+  (detail.tradesIppan || []).forEach(function(trade) { if (trade) allTrades[trade] = true; });
+  (detail.tradesTokutei || []).forEach(function(trade) { if (trade) allTrades[trade] = true; });
+  updateRecord_(SHEETS.MLITPermits, current._row, {
+    expiry_date: observedExpiry,
+    observed_expiry_date: observedExpiry,
+    expiry_wareki: detail.expiryWareki || '',
+    days_remaining: resolveDaysRemaining_(observedExpiry, null),
+    trades_ippan: (detail.tradesIppan || []).join('|'),
+    trades_tokutei: (detail.tradesTokutei || []).join('|'),
+    trades_count: Object.keys(allTrades).length,
+    category: category,
+    fetch_status: 'OK',
+    last_synced: nowString,
+    last_attempted_at: nowString,
+    last_success_at: nowString,
+    next_retry_at: '',
+    consecutive_failure_count: 0,
+    consecutive_not_found_count: 0,
+    last_error_code: '',
+    last_error_message: '',
+    refresh_requested_at: '',
+    refresh_requested_by: '',
+    refresh_priority: '',
+    diff_status: diffStatus,
+    diff_detected_at: diffDetectedAt,
+    observed_company_name: observedCompanyName,
+    diff_type: diffStatus === 'NONE' ? 'NONE' : diffType,
+    diff_risk_flags: diffStatus === 'NONE' ? '' : riskFlags.join('|')
+  });
+  return {
+    diffStatus: diffStatus,
+    approvedExpiry: approvedExpiry,
+    observedExpiry: observedExpiry,
+    diffType: diffType,
+    riskFlags: riskFlags
   };
+}
 
+function refreshOneMlitPermit_(observation) {
+  var authority = String(observation.authority || '').trim();
+  var permitNumber = String(observation.permit_number || '').trim();
+  var nowString = getNowString_();
+  if (!authority || !permitNumber) {
+    recordMlitTransientFailure_(
+      observation,
+      'MLIT_IDENTIFIER_MISSING',
+      'authority/permit_number欠損',
+      nowString
+    );
+    return { result: '確認不可', message: 'authority/permit_number欠損' };
+  }
+  recordMlitAttempt_(observation, nowString);
   var licenseNoKbn = getLicenseNoKbn_(authority);
   var prefCode = getPrefCode_(authority);
-
-  // バックグラウンド処理なのでユーザー対面より長めに待つが、無制限はダメ。
-  // 30 秒超 = 既に 10 件以上が前にある = MLIT_QUEUE_FULL で諦め、次回 stale 再試行。
-  var ROLLING_MAX_WAIT_MS = 30000;
-
-  // 検索 API
   var candidates;
   try {
     candidates = withMlitRateLimit_(function() {
       return searchMlitPermit_(licenseNoKbn, permitNumber, prefCode);
-    }, { maxWaitMs: ROLLING_MAX_WAIT_MS });
-  } catch (e) {
-    // 一時障害扱い（QUEUE_FULL も含む）: fetch_status は据え置き、last_synced だけ更新
-    updateLastSyncedOnly();
-    return { result: '確認不可', message: 'searchMlitPermit_ error: ' + e.message };
+    }, { maxWaitMs: 30000 });
+  } catch (error) {
+    recordMlitTransientFailure_(
+      observation,
+      String(error.code || 'MLIT_SEARCH_ERROR'),
+      error.message || String(error),
+      nowString
+    );
+    return { result: '確認不可', message: 'search error: ' + error.message };
   }
-
-  // 候補 0 件: NOT_FOUND_AT_REFRESH（候補から除外しないので次回も対象）
   if (!candidates || candidates.length === 0) {
-    var freshRow1 = resolveMlitPermitRow_(authority, permitNumber);
-    if (freshRow1 < 0) return { result: '確認不可', message: '更新時に行が見つからない（手動削除？）' };
-    updateRecord_(SHEETS.MLITPermits, freshRow1, {
-      fetch_status: 'NOT_FOUND_AT_REFRESH',
-      last_synced: nowStr
-    });
-    return { result: '不一致', message: 'NOT_FOUND_AT_REFRESH' };
+    var notFound = recordMlitNotFound_(observation, nowString);
+    return {
+      result: notFound.pendingReview ? '差分' : '確認不可',
+      message: 'NOT_FOUND count=' + notFound.count
+    };
+  }
+  if (candidates.length > 1) {
+    recordMlitAmbiguousMatch_(observation, candidates.length, nowString);
+    return {
+      result: '差分',
+      message: 'AMBIGUOUS_MATCH count=' + candidates.length
+    };
   }
 
-  // 詳細 API
   var detail;
   try {
     detail = withMlitRateLimit_(function() {
       return fetchMlitDetail_(candidates[0]);
-    }, { maxWaitMs: ROLLING_MAX_WAIT_MS });
-  } catch (e) {
-    // 一時障害扱い（QUEUE_FULL も含む）
-    updateLastSyncedOnly();
-    return { result: '確認不可', message: 'fetchMlitDetail_ error: ' + e.message };
+    }, { maxWaitMs: 30000 });
+  } catch (error) {
+    recordMlitTransientFailure_(
+      observation,
+      String(error.code || 'MLIT_DETAIL_ERROR'),
+      error.message || String(error),
+      nowString
+    );
+    return { result: '確認不可', message: 'detail error: ' + error.message };
   }
-
   if (!detail || !detail.found) {
-    // パース失敗 = 一時障害扱い（次回 stale で再試行）
-    updateLastSyncedOnly();
-    return { result: '確認不可', message: detail && detail.error ? detail.error : 'detail not found' };
+    recordMlitTransientFailure_(
+      observation,
+      'MLIT_DETAIL_INVALID',
+      detail && detail.error ? detail.error : 'detail not found',
+      nowString
+    );
+    return { result: '確認不可', message: 'detail invalid' };
   }
-
-  // 成功: 全フィールド更新（行を再解決してから書き込む）
-  var hasIppan = detail.tradesIppan && detail.tradesIppan.length > 0;
-  var hasTokutei = detail.tradesTokutei && detail.tradesTokutei.length > 0;
-  var category = '';
-  if (hasIppan && hasTokutei) category = '般特';
-  else if (hasIppan) category = '般';
-  else if (hasTokutei) category = '特';
-
-  var allTradesMap = {};
-  (detail.tradesIppan || []).forEach(function(t) { if (t) allTradesMap[t] = true; });
-  (detail.tradesTokutei || []).forEach(function(t) { if (t) allTradesMap[t] = true; });
-  var tradesCount = Object.keys(allTradesMap).length;
-
-  var daysRemaining = resolveDaysRemaining_(detail.expiryTo, null);
-
-  var freshRow2 = resolveMlitPermitRow_(authority, permitNumber);
-  if (freshRow2 < 0) {
-    return { result: '確認不可', message: '更新時に行が見つからない（手動削除？）' };
+  try {
+    var success = recordMlitSuccess_(observation, detail, nowString);
+    return {
+      result: success.diffStatus === 'PENDING_REVIEW' ? '差分' : '一致',
+      message: success.diffStatus +
+        ' type=' + success.diffType +
+        ' risks=' + success.riskFlags.join('|') +
+        ' approved=' + success.approvedExpiry +
+        ' observed=' + success.observedExpiry
+    };
+  } catch (error) {
+    recordMlitTransientFailure_(
+      observation,
+      String(error.code || 'MLIT_RESULT_ERROR'),
+      error.message || String(error),
+      nowString
+    );
+    return { result: '確認不可', message: error.message || String(error) };
   }
-  updateRecord_(SHEETS.MLITPermits, freshRow2, {
-    expiry_date: detail.expiryTo || '',
-    expiry_wareki: detail.expiryWareki || '',
-    days_remaining: daysRemaining !== null ? daysRemaining : '',
-    trades_ippan: (detail.tradesIppan || []).join('|'),
-    trades_tokutei: (detail.tradesTokutei || []).join('|'),
-    trades_count: tradesCount,
-    category: category,
-    fetch_status: 'OK',
-    last_synced: nowStr
-  });
-
-  return { result: '一致', message: 'updated' };
 }
 
-// ---------------------------------------------------------------------------
-// メインエントリ（time-driven trigger 用）
-// ---------------------------------------------------------------------------
-
-/**
- * 毎日のローリング再確認バッチ。time-driven trigger から呼ぶ。
- *
- * 設定値（ScriptProperties で上書き可）:
- *   - MLIT_ROLLING_DAILY_LIMIT (default: 5)
- *   - MLIT_ROLLING_MAX_STALE_DAYS (default: 7、2026-04-27 改修で 30→7)
- *   - MLIT_ROLLING_PAUSE='true' で即時停止
- *
- * Note: ScriptLock は使わない（withMlitRateLimit_ が短時間ロック取るのみ）。
- *       多重起動防止は trigger 側設計+冪等性に依存。
- */
-function runDailyMlitRolling_() {
-  if (isMlitRollingPaused_()) {
-    Logger.log('runDailyMlitRolling_: kill switch ON のため停止');
-    return;
-  }
-
-  var props = PropertiesService.getScriptProperties();
-  var dailyLimit = parseInt(
-    props.getProperty('MLIT_ROLLING_DAILY_LIMIT') || MLIT_ROLLING_DEFAULTS_.DAILY_LIMIT,
-    10
-  );
-  var maxStaleDays = parseInt(
-    props.getProperty('MLIT_ROLLING_MAX_STALE_DAYS') || MLIT_ROLLING_DEFAULTS_.MAX_STALE_DAYS,
-    10
-  );
-
-  var candidates = pickMlitRollingCandidates_(dailyLimit, maxStaleDays);
-  Logger.log('runDailyMlitRolling_: 候補 ' + candidates.length + ' 件 (limit=' + dailyLimit + ', stale=' + maxStaleDays + 'days)');
-
-  var counts = { '一致': 0, '不一致': 0, '確認不可': 0 };
-  var startTs = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
-
-  for (var i = 0; i < candidates.length; i++) {
-    if (isMlitRollingPaused_()) {
-      Logger.log('runDailyMlitRolling_: ループ内で kill switch を検出、' + i + '/' + candidates.length + ' で中断');
-      break;
-    }
-
-    var permit = candidates[i];
+function tryAcquireMlitJobLease_(jobName) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return null;
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var raw = properties.getProperty(MLIT_JOB_LEASE_KEY_);
+    var current = null;
     try {
-      var res = refreshOneMlitPermit_(permit);
-      counts[res.result] = (counts[res.result] || 0) + 1;
-      Logger.log(
-        '[' + (i + 1) + '/' + candidates.length + '] ' +
-        permit.company_id + ' ' + permit.authority + ' ' + permit.permit_number +
-        ' → ' + res.result + ' (' + res.message + ')'
-      );
-    } catch (err) {
-      counts['確認不可']++;
-      Logger.log('refreshOneMlitPermit_ エラー (company_id=' + permit.company_id + '): ' + err.message);
+      current = raw ? JSON.parse(raw) : null;
+    } catch (ignoredInvalidLease) {
+      current = null;
     }
-    // 待機は withMlitRateLimit_ 内で処理されるため、ここでは sleep しない
+    if (current && Number(current.expiresAt || 0) > Date.now()) return null;
+    var token = generateUuid_();
+    properties.setProperty(MLIT_JOB_LEASE_KEY_, JSON.stringify({
+      token: token,
+      jobName: jobName,
+      expiresAt: Date.now() + MLIT_ROLLING_DEFAULTS_.LEASE_SECONDS * 1000
+    }));
+    return token;
+  } finally {
+    lock.releaseLock();
   }
+}
 
-  writeAuditLog_(
-    'system',
-    'MLIT_ROLLING',
-    'Batch',
-    'daily',
-    'started=' + startTs +
-    ' limit=' + dailyLimit +
-    ' picked=' + candidates.length +
-    ' 一致=' + counts['一致'] +
-    ' 不一致=' + counts['不一致'] +
-    ' 確認不可=' + counts['確認不可']
+function releaseMlitJobLease_(token) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return false;
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var raw = properties.getProperty(MLIT_JOB_LEASE_KEY_);
+    var current = null;
+    try {
+      current = raw ? JSON.parse(raw) : null;
+    } catch (ignoredInvalidLease) {
+      current = null;
+    }
+    if (current && current.token === token) {
+      properties.deleteProperty(MLIT_JOB_LEASE_KEY_);
+      return true;
+    }
+    return false;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function runMlitCandidateBatch_(jobName, candidates) {
+  if (getMlitSyncMode_() === 'OFF' || isMlitRollingPaused_()) {
+    return { success: false, skipped: true, reason: 'MLIT_SYNC_OFF' };
+  }
+  var leaseToken = tryAcquireMlitJobLease_(jobName);
+  if (!leaseToken) {
+    return { success: false, skipped: true, reason: 'MLIT_JOB_ALREADY_RUNNING' };
+  }
+  var counts = { '一致': 0, '差分': 0, '確認不可': 0 };
+  var startedAt = getNowString_();
+  try {
+    candidates.forEach(function(observation) {
+      if (isMlitRollingPaused_()) return;
+      var result = refreshOneMlitPermit_(observation);
+      counts[result.result] = (counts[result.result] || 0) + 1;
+      Logger.log(
+        jobName + ' permit_id=' + String(observation.permit_id || '') +
+        ' result=' + result.result + ' message=' + result.message
+      );
+    });
+    appendAuditEvent_({
+      user_email: 'SYSTEM_MLIT',
+      action: 'MLIT_SYNC_BATCH',
+      target_type: 'MlitSync',
+      target_id: jobName,
+      details: JSON.stringify({
+        startedAt: startedAt,
+        picked: candidates.length,
+        counts: counts
+      }),
+      status: 'COMMITTED'
+    });
+    return {
+      success: true,
+      picked: candidates.length,
+      counts: counts
+    };
+  } catch (error) {
+    appendAuditEvent_({
+      user_email: 'SYSTEM_MLIT',
+      action: 'MLIT_SYNC_BATCH',
+      target_type: 'MlitSync',
+      target_id: jobName,
+      details: String(error.message || error).substring(0, 500),
+      status: 'ABORTED',
+      error_code: String(error.code || 'MLIT_BATCH_FAILED')
+    });
+    throw error;
+  } finally {
+    releaseMlitJobLease_(leaseToken);
+  }
+}
+
+function getDynamicMlitDailyLimit_() {
+  var configured = Number(
+    PropertiesService.getScriptProperties().getProperty('MLIT_ROLLING_DAILY_LIMIT')
   );
-
-  Logger.log(
-    'runDailyMlitRolling_ 完了: 一致=' + counts['一致'] +
-    ', 不一致=' + counts['不一致'] +
-    ', 確認不可=' + counts['確認不可']
+  if (Number.isInteger(configured) && configured > 0) {
+    return Math.min(configured, MLIT_ROLLING_DEFAULTS_.MAX_BATCH_SIZE);
+  }
+  var activePermitCount = getActiveMonitoredPermitPairs_().length;
+  if (activePermitCount === 0) return 1;
+  return Math.min(
+    Math.ceil(activePermitCount / MLIT_ROLLING_DEFAULTS_.TARGET_CYCLE_DAYS) + 2,
+    MLIT_ROLLING_DEFAULTS_.MAX_BATCH_SIZE
   );
 }
 
-// ---------------------------------------------------------------------------
-// テスト・運用補助
-// ---------------------------------------------------------------------------
-
-/**
- * 候補選択だけを試す（GAS エディタから手動実行）
- */
-function debugPickMlitRollingCandidates_() {
+function runDailyMlitRolling_() {
+  if (getMlitSyncMode_() === 'OFF' || isMlitRollingPaused_()) {
+    return { success: false, skipped: true, reason: 'MLIT_SYNC_OFF' };
+  }
+  var limit = getDynamicMlitDailyLimit_();
   var candidates = pickMlitRollingCandidates_(
-    MLIT_ROLLING_DEFAULTS_.DAILY_LIMIT,
+    limit,
     MLIT_ROLLING_DEFAULTS_.MAX_STALE_DAYS
   );
-  Logger.log('候補数: ' + candidates.length);
-  candidates.forEach(function(c, i) {
-    Logger.log(
-      (i + 1) + ': ' + c.company_id + ' ' + c.authority + ' ' + c.permit_number +
-      ' last_synced=' + c.last_synced +
-      ' fetch_status=' + c.fetch_status
-    );
-  });
+  return runMlitCandidateBatch_('NIGHTLY_SWEEP', candidates);
 }
 
-/**
- * 1件だけ手動で再確認（GAS エディタから company_id 指定で実行）
- * @param {string} companyId
- */
-function debugRefreshOneByCompanyId_(companyId) {
-  var permit = findByKey_(SHEETS.MLITPermits, 'company_id', companyId);
-  if (!permit) {
-    Logger.log('company_id=' + companyId + ' の MLITPermits 行が見つかりません');
-    return;
-  }
-  var res = refreshOneMlitPermit_(permit);
-  Logger.log('result: ' + res.result + ' message: ' + res.message);
-}
-
-// ---------------------------------------------------------------------------
-// Trigger セットアップ（冪等）
-// ---------------------------------------------------------------------------
-
-/**
- * runDailyMlitRolling_ の time-driven trigger を毎日 02:00-03:00 で登録する。
- * 既に同名 trigger があれば一旦削除してから登録（冪等）。
- *
- * 実行方法:
- *   - GAS エディタ: 関数 setupMlitRollingTrigger_ を選んで Run
- *   - clasp run: clasp run setupMlitRollingTrigger_
- *
- * @return {Object} {removed: 削除数, created: trigger ID}
- */
-function setupMlitRollingTrigger_() {
-  var existingTriggers = ScriptApp.getProjectTriggers();
-  var removed = 0;
-  existingTriggers.forEach(function(t) {
-    if (t.getHandlerFunction() === 'runDailyMlitRolling_') {
-      ScriptApp.deleteTrigger(t);
-      removed++;
+function pickPreNotificationMlitCandidates_() {
+  seedMlitObservationsFromCanonical_();
+  var stageDays = parseNotifyStages_(getConfig_('NOTIFY_STAGES_DAYS'));
+  var largestStage = Math.max.apply(null, stageDays);
+  var nowMs = Date.now();
+  var candidates = [];
+  getActiveMonitoredPermitPairs_().forEach(function(pair) {
+    var days = daysUntil_(pair.permit.expiry_date);
+    if (isNaN(days) || days > largestStage) return;
+    var observation = findMlitObservationForPermit_(pair.permit);
+    if (!observation ||
+        String(observation.diff_status || '').toUpperCase() === 'PENDING_REVIEW' ||
+        !isMlitRetryDue_(observation, nowMs)) return;
+    var lastSuccess = parseStoredTimestamp_(observation.last_success_at);
+    if (!lastSuccess || nowMs - lastSuccess.getTime() > 24 * 3600000) {
+      candidates.push(observation);
     }
   });
-
-  var newTrigger = ScriptApp.newTrigger('runDailyMlitRolling_')
-    .timeBased()
-    .atHour(2)            // 午前 2 時台に起動（GAS 内部で 2:00-3:00 のいずれか）
-    .everyDays(1)
-    .create();
-
-  var info = {
-    removed: removed,
-    created: newTrigger.getUniqueId(),
-    handler: 'runDailyMlitRolling_',
-    schedule: 'everyDays(1) at hour 2'
-  };
-  Logger.log('setupMlitRollingTrigger_ 完了: ' + JSON.stringify(info));
-  return info;
+  candidates.sort(function(a, b) {
+    var aSuccess = parseStoredTimestamp_(a.last_success_at);
+    var bSuccess = parseStoredTimestamp_(b.last_success_at);
+    return (aSuccess ? aSuccess.getTime() : 0) - (bSuccess ? bSuccess.getTime() : 0);
+  });
+  return candidates.slice(0, MLIT_ROLLING_DEFAULTS_.PRE_NOTIFICATION_LIMIT);
 }
 
-/**
- * 現在登録されている trigger を一覧表示（debug 用）
- */
-function listProjectTriggers_() {
-  var triggers = ScriptApp.getProjectTriggers();
-  Logger.log('登録 trigger 数: ' + triggers.length);
-  triggers.forEach(function(t, i) {
-    Logger.log(
-      (i + 1) + ': handler=' + t.getHandlerFunction() +
-      ' eventType=' + t.getEventType() +
-      ' uniqueId=' + t.getUniqueId()
-    );
-  });
+function runPreNotificationMlitRefresh_() {
+  if (getMlitSyncMode_() === 'OFF' || isMlitRollingPaused_()) {
+    return { success: false, skipped: true, reason: 'MLIT_SYNC_OFF' };
+  }
+  return runMlitCandidateBatch_(
+    'PRE_NOTIFICATION',
+    pickPreNotificationMlitCandidates_()
+  );
+}
+
+function debugPickMlitRollingCandidates_() {
+  var candidates = pickMlitRollingCandidates_(getDynamicMlitDailyLimit_(), 7);
+  Logger.log(JSON.stringify(candidates.map(function(candidate) {
+    return {
+      permit_id: candidate.permit_id,
+      company_id: candidate.company_id,
+      last_success_at: candidate.last_success_at,
+      refresh_requested_at: candidate.refresh_requested_at
+    };
+  })));
+  return candidates;
+}
+
+function debugRefreshOneByCompanyId_(companyId) {
+  var permit = readRecords_(SHEETS.Permits).filter(function(row) {
+    return String(row.company_id || '') === String(companyId || '');
+  })[0];
+  if (!permit) throw new Error('company_idに紐づく許可情報がありません');
+  var company = findByKey_(SHEETS.Companies, 'company_id', companyId);
+  var observation = ensureMlitObservationForPermit_(permit, company);
+  return refreshOneMlitPermit_(observation);
 }

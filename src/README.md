@@ -7,7 +7,7 @@
 建設業許可証管理システムのバックエンドPythonコード一式。
 - **FastAPI Webアプリ** (`app/`) — ダッシュボード・API・画像ビューワー
 - **パイプラインスクリプト** — Gmail受信→OCR→照合→MLIT検証→通知の各ステップ
-- **GAS連携スクリプト** (`.gs`) — Google Sheets/Forms向けApps Scriptソース
+- **GAS連携スクリプト** (`.gs`) — Google SheetsとWebアプリ向けApps Scriptソース
 - **ユーティリティ** (`utils/`) — OCR後処理・フィールド正規化・和暦変換
 
 サブディレクトリの詳細は各READMEを参照。
@@ -108,7 +108,7 @@
 | `Config.gs` | 設定値管理 |
 | `Utils.gs` | 共通ユーティリティ |
 | `Models.gs` | データモデル定義 |
-| `FormHandler.gs` | フォーム送信処理 |
+| `PermitSyncService.gs` | MLIT観測差分、許可version、手動反映 |
 | `Scheduler.gs` | 日次通知バッチ |
 | `Mailer.gs` | メール送信 |
 | `Ui.gs` | スプレッドシートメニュー |

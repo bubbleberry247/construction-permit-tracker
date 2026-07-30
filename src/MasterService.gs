@@ -89,6 +89,12 @@ function getCompanyVersion_(company) {
   return Number.isInteger(version) && version > 0 ? version : 1;
 }
 
+function isCompanyPermitMonitoringEnabled_(company) {
+  return !!company &&
+    String(company.status || 'ACTIVE').toUpperCase() === 'ACTIVE' &&
+    parseStrictBoolean_(company.permit_monitoring_enabled);
+}
+
 function getCompanyReadiness_(company) {
   var email = normalizeEmailAddress_(company.contact_email);
   if (!email) return { code: 'EMAIL_MISSING', label: 'メール未設定', sendReady: false };
@@ -127,6 +133,7 @@ function serializeCompanyForClient_(company) {
     contact_verified_by: normalizeEmailAddress_(company.contact_verified_by),
     notification_mode: String(company.notification_mode || 'MANUAL'),
     status: String(company.status || 'ACTIVE'),
+    permit_monitoring_enabled: parseStrictBoolean_(company.permit_monitoring_enabled),
     data_version: getCompanyVersion_(company),
     created_at: company.created_at || '',
     created_by: normalizeEmailAddress_(company.created_by),

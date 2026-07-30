@@ -53,8 +53,6 @@ function reloadConfigAll_() {
 function checkConfig_() {
   var REQUIRED_KEYS = [
     'ADMIN_EMAILS',
-    'DRIVE_ROOT_FOLDER_ID',
-    'FORM_ID',
     'NOTIFY_STAGES_DAYS',
     'RUN_TIMEZONE',
     'ENABLE_SEND',

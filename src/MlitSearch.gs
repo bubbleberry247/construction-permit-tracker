@@ -202,13 +202,17 @@ function searchMlitPermit_(licenseNoKbn, permitNumber, expectedPrefCode) {
     response = UrlFetchApp.fetch(MLIT_SEARCH_URL_, options);
   } catch (e) {
     Logger.log('searchMlitPermit_ fetch error: ' + e.message);
-    return [];
+    var fetchError = new Error('MLIT_SEARCH_FETCH_FAILED: ' + (e.message || String(e)));
+    fetchError.code = 'MLIT_SEARCH_FETCH_FAILED';
+    throw fetchError;
   }
 
   var responseCode = response.getResponseCode();
   if (responseCode >= 500) {
     Logger.log('searchMlitPermit_ HTTP ' + responseCode);
-    return [];
+    var httpError = new Error('MLIT_SEARCH_HTTP_' + responseCode);
+    httpError.code = 'MLIT_SEARCH_HTTP_ERROR';
+    throw httpError;
   }
 
   // cp932 (Shift_JIS) デコード

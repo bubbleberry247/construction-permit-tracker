@@ -689,8 +689,8 @@ test('危険な通知入口は公開トップレベル関数として残さな�
   assert.doesNotMatch(scheduler, /function\s+runNow\s*\(/);
   assert.match(scheduler, /function\s+runNow_\s*\(/);
   assert.doesNotMatch(ui, /function\s+setupDailyTrigger\s*\(/);
-  assert.match(ui, /function\s+setupDailyTrigger_\s*\(/);
-  assert.match(ui, /ScriptApp\.newTrigger\(FUNCTION_NAME\)/);
+  assert.doesNotMatch(ui, /function\s+setupDailyTrigger_\s*\(/);
+  assert.doesNotMatch(ui, /ScriptApp\.newTrigger/);
   assert.doesNotMatch(api, /function\s+apiSendNotification\s*\(/);
   assert.doesNotMatch(index, /今すぐ通知送信/);
   assert.doesNotMatch(index, /function\s+sendNotification\s*\(/);

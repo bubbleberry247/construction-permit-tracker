@@ -36,7 +36,23 @@ var NOTIFICATION_QUEUE_HEADERS = [
   'subject', 'body_template', 'addendum', 'status', 'send_origin',
   'created_at', 'created_by', 'approved_at', 'approved_by',
   'sending_at', 'sent_at', 'cancelled_at', 'updated_at',
-  'notification_id', 'error_code', 'error_message'
+  'notification_id', 'error_code', 'error_message',
+  'source_company_version', 'source_permit_version', 'source_expiry_date'
+];
+var MLIT_PERMITS_HEADERS_ = [
+  'company_id', 'company_name', 'permit_number', 'authority', 'category',
+  'expiry_date', 'expiry_wareki', 'days_remaining',
+  'trades_ippan', 'trades_tokutei', 'trades_count',
+  'fetch_status', 'last_synced',
+  'permit_id', 'observed_expiry_date',
+  'last_attempted_at', 'last_success_at', 'next_retry_at',
+  'consecutive_failure_count', 'consecutive_not_found_count',
+  'last_error_code', 'last_error_message',
+  'refresh_requested_at', 'refresh_requested_by', 'refresh_priority',
+  'diff_status', 'diff_detected_at',
+  'applied_at', 'applied_by',
+  'dismissed_at', 'dismissed_by', 'dismiss_reason',
+  'observed_company_name', 'diff_type', 'diff_risk_flags'
 ];
 var MASTER_IMPORT_STAGING_HEADERS = [
   'source_row', 'vendor_no', 'company_name_raw', 'company_name_normalized',
@@ -58,6 +74,7 @@ function getSheet_(name) {
     if (name === SHEETS.UserAccess) initialHeaders = USERACCESS_HEADERS;
     if (name === SHEETS.AuthLog) initialHeaders = AUTHLOG_HEADERS;
     if (name === SHEETS.NotificationQueue) initialHeaders = NOTIFICATION_QUEUE_HEADERS;
+    if (name === SHEETS.MLITPermits) initialHeaders = MLIT_PERMITS_HEADERS_;
     if (name === SHEETS.MasterImportStaging) initialHeaders = MASTER_IMPORT_STAGING_HEADERS;
     if (initialHeaders) {
       sheet.getRange(1, 1, 1, initialHeaders.length).setValues([initialHeaders]);

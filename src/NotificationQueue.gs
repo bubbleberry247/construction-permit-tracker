@@ -81,6 +81,11 @@ function serializeQueueItem_(queue) {
     expiry_date: permit ? permit.expiry_date || '' : '',
     stage: String(queue.stage || ''),
     source_data_version: Number(queue.source_data_version || 0),
+    source_company_version: Number(
+      queue.source_company_version || queue.source_data_version || 0
+    ),
+    source_permit_version: Number(queue.source_permit_version || 0),
+    source_expiry_date: queue.source_expiry_date || '',
     to_email: normalizeEmailAddress_(queue.to_email),
     cc_email: String(queue.cc_email || ''),
     bcc_email: String(queue.bcc_email || ''),
@@ -120,21 +125,34 @@ function hasReservedOrSentNotificationKey_(idempotencyKey) {
   });
 }
 
-function determineCandidateStage_(days, stageDays, permitId) {
-  var candidates = [];
-  if (days < 0) candidates.push('EXPIRED');
-  for (var i = stageDays.length - 1; i >= 0; i--) {
-    if (days <= stageDays[i]) candidates.push(String(stageDays[i]));
+function buildNotificationIdempotencyKey_(permitId, expiryDate, stage) {
+  var expiryKey = normalizeExpiryDateKey_(expiryDate);
+  if (!expiryKey) {
+    throw appError_('INVALID_EXPIRY_DATE', '通知候補の有効期限が不正です', false);
   }
-  for (var c = 0; c < candidates.length; c++) {
-    var key = 'PERMIT:' + permitId + ':STAGE:' + candidates[c];
-    if (hasReservedOrSentNotificationKey_(key)) continue;
-    var existing = findLatestQueueByIdempotency_(key);
-    if (!existing ||
-        ['STALE', 'CANCELLED', 'FAILED'].indexOf(String(existing.status || '')) >= 0) {
-      return candidates[c];
+  return 'PERMIT:' + permitId + ':EXPIRY:' + expiryKey + ':STAGE:' + stage;
+}
+
+function determineCandidateStage_(days, stageDays, permitId, expiryDate) {
+  var stage = days < 0 ? 'EXPIRED' : null;
+  if (stage === null) {
+    for (var i = stageDays.length - 1; i >= 0; i--) {
+      if (days <= stageDays[i]) {
+        stage = String(stageDays[i]);
+        break;
+      }
     }
-    if (String(existing.status || '') === 'BLOCKED') return candidates[c];
+  }
+  if (stage === null) return null;
+
+  var key = buildNotificationIdempotencyKey_(permitId, expiryDate, stage);
+  if (hasReservedOrSentNotificationKey_(key)) return null;
+  var existing = findLatestQueueByIdempotency_(key);
+  if (!existing ||
+      ['STALE', 'CANCELLED', 'FAILED', 'BLOCKED'].indexOf(
+        String(existing.status || '')
+      ) >= 0) {
+    return stage;
   }
   return null;
 }
@@ -142,21 +160,30 @@ function determineCandidateStage_(days, stageDays, permitId) {
 function buildQueueRecord_(permit, company, stage, actorEmail) {
   var built = Mailer.buildExpiryNotification(permit, company, stage);
   var readiness = getCompanyReadiness_(company);
+  var mlitState = getMlitObservationState_(permit);
+  var sendReady = readiness.sendReady && mlitState.sendFresh;
+  var blockedCode = readiness.sendReady ? mlitState.code : readiness.code;
+  var blockedLabel = readiness.sendReady ? mlitState.label : readiness.label;
   var now = getNowString_();
   return {
     queue_id: generateUuid_(),
-    idempotency_key: 'PERMIT:' + permit.permit_id + ':STAGE:' + stage,
+    idempotency_key: buildNotificationIdempotencyKey_(
+      permit.permit_id, permit.expiry_date, stage
+    ),
     company_id: company.company_id,
     permit_id: permit.permit_id,
     stage: String(stage),
     source_data_version: getCompanyVersion_(company),
+    source_company_version: getCompanyVersion_(company),
+    source_permit_version: getPermitDataVersion_(permit),
+    source_expiry_date: normalizeExpiryDateKey_(permit.expiry_date),
     to_email: built.to_email,
     cc_email: built.cc_email,
     bcc_email: built.bcc_email,
     subject: built.subject,
     body_template: built.body,
     addendum: '',
-    status: readiness.sendReady ? 'READY' : 'BLOCKED',
+    status: sendReady ? 'READY' : 'BLOCKED',
     send_origin: '',
     created_at: now,
     created_by: actorEmail || 'SYSTEM',
@@ -167,8 +194,8 @@ function buildQueueRecord_(permit, company, stage, actorEmail) {
     cancelled_at: '',
     updated_at: now,
     notification_id: '',
-    error_code: readiness.sendReady ? '' : readiness.code,
-    error_message: readiness.sendReady ? '' : readiness.label
+    error_code: sendReady ? '' : blockedCode,
+    error_message: sendReady ? '' : blockedLabel
   };
 }
 
@@ -195,15 +222,14 @@ function generateNotificationCandidates_(actorEmail) {
 
   permits.forEach(function(permit) {
     try {
+      var company = findByKey_(SHEETS.Companies, 'company_id', permit.company_id);
+      if (!company || !isCompanyPermitMonitoringEnabled_(company)) return;
       var days = daysUntil_(permit.expiry_date);
       if (isNaN(days)) return;
-      var stage = determineCandidateStage_(days, stageDays, permit.permit_id);
+      var stage = determineCandidateStage_(
+        days, stageDays, permit.permit_id, permit.expiry_date
+      );
       if (stage === null) return;
-      var company = findByKey_(SHEETS.Companies, 'company_id', permit.company_id);
-      if (!company) {
-        result.errors++;
-        return;
-      }
       var outcome = createOrRefreshQueueCandidate_(
         permit, company, stage, actorEmail || 'SYSTEM'
       );
@@ -312,9 +338,20 @@ function validateQueuedSendPolicy_(queueContext) {
 
   var company = findByKey_(SHEETS.Companies, 'company_id', queue.company_id);
   if (!company) throw appError_('COMPANY_NOT_FOUND', '会社が見つかりません', false);
-  if (getCompanyVersion_(company) !== Number(queue.source_data_version || 0)) {
+  var queuedCompanyVersion = Number(
+    queue.source_company_version || queue.source_data_version || 0
+  );
+  if (getCompanyVersion_(company) !== queuedCompanyVersion) {
     throw appError_('STALE_QUEUE', '会社マスタ更新後のため候補を再生成してください', false);
   }
+  var permit = findByKey_(SHEETS.Permits, 'permit_id', queue.permit_id);
+  if (!permit) throw appError_('PERMIT_NOT_FOUND', '許可情報が見つかりません', false);
+  if (getPermitDataVersion_(permit) !== Number(queue.source_permit_version || 0) ||
+      normalizeExpiryDateKey_(permit.expiry_date) !==
+        normalizeExpiryDateKey_(queue.source_expiry_date)) {
+    throw appError_('STALE_QUEUE', '許可情報更新後のため候補を再生成してください', false);
+  }
+  assertPermitFreshForSend_(permit, company);
   var readiness = getCompanyReadiness_(company);
   if (!readiness.sendReady) {
     throw appError_('CONTACT_NOT_READY', readiness.label, false);
@@ -683,7 +720,8 @@ function getOperationsStatus_(payload) {
         getSecureSetting_('LAST_BACKUP_AT'),
       lastStatus: getSecureSetting_('LAST_BACKUP_STATUS'),
       configured: !!getSecureSetting_('BACKUP_FOLDER_ID')
-    }
+    },
+    mlit: getMlitOperationsStatus_()
   };
 }
 
