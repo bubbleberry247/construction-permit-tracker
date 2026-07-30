@@ -3,7 +3,7 @@
 作成日: 2026-07-30
 対象branch: `codex/phase0-p1-safety`
 基点commit: `707794a`
-状態: **会社マスタ・MLIT差分・通知連携のローカル実装、自動テスト、本番データ読取専用dry-run完了／UAT・本番反映未実施**
+状態: **会社マスタ・MLIT差分・通知連携のローカル実装、自動テスト、127社の正式承認・確定staging・正本候補dry-run完了／UAT・本番反映未実施**
 
 ## 1. 結論
 
@@ -14,7 +14,7 @@
 
 - 本番の`GOOGLE_CLIENT_ID`が未設定。
 - 本番`UserAccess`は旧`admin`の3行で、`canSendExternal`列もまだない。
-- 127社dry-runには`REVIEW_REQUIRED` 13社と`SYSTEM_ONLY` 4社がある。
+- 127社は正式承認済みだが、確定stagingをUAT複製環境へロードしていない。
 - 設計で必須とした複製スプレッドシート・別deploymentでの攻撃テスト／UATが未実施。
 - `INTERNAL_TEST`以降の実送信、10営業日の段階昇格条件は時間経過と運用承認が必要。
 
@@ -163,6 +163,20 @@ SYSTEM_ONLYの推奨判断は、`C0076=KEEP_SYSTEM_ONLY`、
 `C0009/C0041/C0141=ARCHIVE_EXCLUDE`。
 この結果は正式承認ではなく、本番・Script Properties・Google Sheetsは未変更。
 
+2026-07-30 13:10:23 JST、ユーザー指示
+「推奨どおり正式承認で進めて」により、次を正式承認として記録した。
+
+- `REVIEW_REQUIRED` 13件: 全件`APPROVE_MATCH`
+- 自動分類114件: 一括承認
+- `C0076`: `KEEP_SYSTEM_ONLY`、移行後`ACTIVE`
+- `C0009`、`C0041`、`C0141`: `ARCHIVE_EXCLUDE`、移行後`INACTIVE`
+- 確定staging: 127行すべて`APPROVED`
+- 承認者表記: `USER_APPROVED_VIA_CODEX`（実在メールを推測していない）
+
+正式承認済みdry-runでも正本候補131社、ACTIVE 128社、INACTIVE 3社、
+company_id・vendor_no重複0、Permit/MLIT孤立参照0を再現した。
+この承認はUAT再現までを次工程とし、本番変更の許可とは分離している。
+
 ## 4. テスト結果
 
 2026-07-30 最新実行:
@@ -284,7 +298,7 @@ UserAccess:
 - UAT用Apps Script project／複製Sheetの作成。
 - Google OAuth Web client IDの作成・設定。
 - 3アカウントの実ブラウザUAT。
-- 13件＋4件の人手照合承認。
+- 正式承認済みstaging CSVのUAT複製環境へのロードとdry-run再現。
 - 本番バックアップ先の設定と復旧実演。
 - 本番push／deployment／公開範囲変更。
 - 5営業日のマスタ更新運用。

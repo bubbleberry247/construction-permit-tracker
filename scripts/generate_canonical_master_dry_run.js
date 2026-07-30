@@ -222,7 +222,19 @@ function main() {
   const outputDir = path.resolve(args['output-dir']);
   const decisionsPath = path.resolve(args['decisions-json']);
   const generatedAt = args['generated-at'] || new Date().toISOString();
-  const reviewer = args.reviewer || 'RECOMMENDATION_SIMULATION';
+  const approvalMode = args['approval-mode'] || 'simulation';
+  if (!['simulation', 'formal'].includes(approvalMode)) {
+    throw new Error('--approval-mode must be simulation or formal');
+  }
+  const formalApproval = approvalMode === 'formal';
+  const reviewer = args.reviewer || (
+    formalApproval ? 'USER_APPROVED_VIA_CODEX' : 'RECOMMENDATION_SIMULATION'
+  );
+  const approvalStatement = args['approval-statement'] || (
+    formalApproval
+      ? '推奨どおり正式承認で進めて'
+      : '推奨判断によるローカルシミュレーション'
+  );
 
   const inputPaths = {
     staging: path.join(inputDir, 'master_import_staging.csv'),
@@ -247,7 +259,9 @@ function main() {
     reviewed_at: generatedAt,
     notes: [
       record.notes,
-      '推奨判断によるローカルdry-run。正式承認・本番反映ではない'
+      formalApproval
+        ? 'ユーザーがCodex会話で推奨判断どおり正式承認。本番反映は未実施'
+        : '推奨判断によるローカルdry-run。正式承認・本番反映ではない'
     ].filter(Boolean).join('; ')
   }));
 
@@ -341,9 +355,12 @@ function main() {
   }
 
   const summary = {
-    mode: 'RECOMMENDATION_SIMULATION_NOT_FORMAL_APPROVAL',
+    mode: formalApproval
+      ? 'FORMAL_USER_APPROVAL_RECORDED_UAT_DRY_RUN'
+      : 'RECOMMENDATION_SIMULATION_NOT_FORMAL_APPROVAL',
     generated_at: generatedAt,
     reviewed_by_marker: reviewer,
+    approval_statement: approvalStatement,
     source_sha256: prepared.sourceSha256,
     input_hashes: Object.fromEntries(
       Object.entries(inputPaths).map(([key, filePath]) => [key, sha256File(filePath)])
@@ -365,7 +382,9 @@ function main() {
     pending_system_only_decision_ids: prepared.pendingSystemOnlyDecisionIds,
     confirmation_required_after_formal_approval:
       `APPLY_CANONICAL_${prepared.sourceSha256.slice(0, 12)}`,
-    formal_approval_ready: false,
+    formal_approval_ready: formalApproval,
+    uat_staging_ready: formalApproval,
+    production_apply_ready: false,
     checks
   };
 
@@ -375,7 +394,12 @@ function main() {
   const decisionHeaders = Object.keys(systemDecisionRows[0]);
   fs.mkdirSync(outputDir, { recursive: true });
   atomicWrite(
-    path.join(outputDir, 'master_import_staging_recommended_simulation.csv'),
+    path.join(
+      outputDir,
+      formalApproval
+        ? 'master_import_staging_approved.csv'
+        : 'master_import_staging_recommended_simulation.csv'
+    ),
     '\uFEFF' + toCsv(stagingHeaders, approvedStaging)
   );
   atomicWrite(
@@ -394,15 +418,42 @@ function main() {
     path.join(outputDir, 'canonical_migration_summary.json'),
     JSON.stringify(summary, null, 2) + '\n'
   );
+  if (formalApproval) {
+    const approvalRecord = {
+      record_type: 'USER_FORMAL_APPROVAL',
+      approved_at: generatedAt,
+      approved_by_marker: reviewer,
+      approval_channel: 'CODEX_CONVERSATION',
+      approval_statement: approvalStatement,
+      source_sha256: prepared.sourceSha256,
+      scope: {
+        automatic_classification_rows: 114,
+        review_required_rows: 13,
+        system_only_rows: 4
+      },
+      review_required_decision: 'APPROVE_MATCH',
+      system_only_decisions: prepared.systemOnlyDecisions,
+      production_changes_authorized_by_this_record: false,
+      next_authorized_stage: 'UAT_REPRODUCTION'
+    };
+    atomicWrite(
+      path.join(outputDir, 'formal_approval_record.json'),
+      JSON.stringify(approvalRecord, null, 2) + '\n'
+    );
+  }
 
   const report = [
-    '# 会社マスタ正本化 推奨判断dry-run',
+    formalApproval
+      ? '# 会社マスタ正本化 正式承認済みUAT dry-run'
+      : '# 会社マスタ正本化 推奨判断dry-run',
     '',
     `生成日時: ${generatedAt}`,
     '',
     '## 結論',
     '',
-    '- この結果は推奨判断を使ったローカルシミュレーションであり、正式承認ではない。',
+    formalApproval
+      ? `- ユーザー指示「${approvalStatement}」を正式承認として記録した。`
+      : '- この結果は推奨判断を使ったローカルシミュレーションであり、正式承認ではない。',
     '- Google Sheets、Apps Script、Script Properties、本番Companiesは変更していない。',
     `- 正本候補は${prepared.canonicalCount}社。ACTIVE ${prepared.activeCount}社、INACTIVE ${prepared.inactiveCount}社。`,
     `- Excel由来の新規採番は${prepared.assignedNewCount}社（${newIds[0]}〜${newIds[newIds.length - 1]}）。`,
@@ -416,10 +467,14 @@ function main() {
       `| ${record.company_id} | ${record.decision} | ${record.resulting_status} |`
     )),
     '',
-    '## 本番反映前の残件',
+    formalApproval ? '## UAT・本番反映前の残件' : '## 本番反映前の残件',
     '',
-    '- 運用責任者が17件と自動分類114件を正式承認する。',
-    '- 承認者・承認日時を入れた確定staging CSVを作る。',
+    ...(formalApproval ? [
+      '- 確定staging CSVと承認記録は作成済み。',
+    ] : [
+      '- 運用責任者が17件と自動分類114件を正式承認する。',
+      '- 承認者・承認日時を入れた確定staging CSVを作る。',
+    ]),
     '- UAT複製環境で同じdry-run結果を再現する。',
     '- 24時間以内のバックアップ成功後にのみ確認文字列を設定する。',
     '',
