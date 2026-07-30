@@ -94,7 +94,10 @@
 - 会社マスタ適用には24時間以内の成功バックアップを必須化。
 - `MasterImportStaging`へ127行だけをロードできるprivate移行入口を実装。
 - 全127行`APPROVED`、業者番号一意、競合・重複0、permit孤立ID 0を再検証。
-- `SYSTEM_ONLY` ID一覧の別途明示承認を必須化。
+- `SYSTEM_ONLY`は会社ごとに`KEEP_SYSTEM_ONLY`または`ARCHIVE_EXCLUDE`を
+  明示判断する方式へ変更。
+- `ARCHIVE_EXCLUDE`はcompany_idとPermit/MLIT参照を残したまま
+  Companiesの`status=INACTIVE`とし、通常画面・送信対象から除外。
 - 新しい`Companies_Migration_*`を作成してから、旧`Companies`を
   `Companies_Archive_*`へ退避して切り替える。
 - 移行途中のrename失敗時に旧`Companies`名を復旧する補償処理を実装。
@@ -141,6 +144,24 @@
 - `system_only.csv`内の4行:
   `C0009`、`C0041`、`C0076`、`C0141`。
 - 特に`C0141`は現行Companiesのサンプル行であり、実在会社として残すかを運用判断する。
+
+推奨判断を仮定したローカル正本化dry-run:
+
+| 項目 | 結果 |
+|---|---:|
+| 正本候補 | 131社 |
+| 既存company_id | 67件 |
+| 新規採番 | 64件（C0148〜C0211） |
+| ACTIVE | 128社 |
+| INACTIVE | 3社 |
+| 業者番号あり | 125社 |
+| company_id重複 | 0件 |
+| vendor_no重複 | 0件 |
+| Permit/MLIT孤立参照 | 0件 |
+
+SYSTEM_ONLYの推奨判断は、`C0076=KEEP_SYSTEM_ONLY`、
+`C0009/C0041/C0141=ARCHIVE_EXCLUDE`。
+この結果は正式承認ではなく、本番・Script Properties・Google Sheetsは未変更。
 
 ## 4. テスト結果
 
@@ -217,9 +238,12 @@ UserAccess:
 7. `MASTER_IMPORT_LOAD_CONFIRMATION`へ
    `LOAD_STAGING_c90fc8e5b803`を設定する。
 8. `loadMasterImportStagingFromDrive_()`を実行する。
-9. `dryRunCanonicalMasterMigration_()`を実行し、件数とSYSTEM_ONLY IDを確認する。
-10. `runDailyBackup_()`を実行し、成功証跡を確認する。
-11. `MASTER_SYSTEM_ONLY_APPROVED_IDS`へ承認済み4 IDをカンマ区切りで設定する。
+9. `MASTER_SYSTEM_ONLY_DECISIONS`へ会社ごとの判断をJSONで設定する。
+    例:
+    `{"C0009":"ARCHIVE_EXCLUDE","C0041":"ARCHIVE_EXCLUDE","C0076":"KEEP_SYSTEM_ONLY","C0141":"ARCHIVE_EXCLUDE"}`
+10. `dryRunCanonicalMasterMigration_()`を実行し、判断待ち0件、ACTIVE/INACTIVE件数、
+    company_id・vendor_no・Permit/MLIT参照を確認する。
+11. `runDailyBackup_()`を実行し、成功証跡を確認する。
 12. `MASTER_IMPORT_APPLY_CONFIRMATION`へ
     `APPLY_CANONICAL_c90fc8e5b803`を設定する。
 13. `applyCanonicalMasterMigration_()`を実行する。

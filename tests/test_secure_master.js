@@ -543,7 +543,7 @@ test('INTERNAL_TESTは実宛先を内部許可宛先へ置換する', () => {
   assert.notEqual(prepared.to, 'old@example.com');
 });
 
-test('マスタ移行は127行・業者番号一意・SYSTEM_ONLY承認を必須にする', () => {
+test('マスタ移行は127行・業者番号一意・SYSTEM_ONLYごとの維持除外判断を必須にする', () => {
   const context = baseContext();
   vm.runInContext(source('MasterMigration.gs'), context, { filename: 'MasterMigration.gs' });
   const rows = Array.from({ length: 127 }, (_, index) => ({
@@ -568,11 +568,41 @@ test('マスタ移行は127行・業者番号一意・SYSTEM_ONLY承認を必須
     error => error.code === 'DUPLICATE_VENDOR_NO'
   );
   assert.throws(
-    () => context.assertSystemOnlyApproval_(['C0002', 'C0001']),
-    error => error.code === 'SYSTEM_ONLY_APPROVAL_REQUIRED'
+    () => context.assertSystemOnlyDecisions_(['C0002', 'C0001'], {}),
+    error => error.code === 'SYSTEM_ONLY_DECISION_REQUIRED'
   );
-  context.__properties.MASTER_SYSTEM_ONLY_APPROVED_IDS = 'C0001,C0002';
-  assert.doesNotThrow(() => context.assertSystemOnlyApproval_(['C0002', 'C0001']));
+  context.__properties.MASTER_SYSTEM_ONLY_DECISIONS = JSON.stringify({
+    C0001: 'KEEP_SYSTEM_ONLY',
+    C0002: 'ARCHIVE_EXCLUDE'
+  });
+  const decisions = context.parseSystemOnlyDecisions_();
+  assert.doesNotThrow(() => (
+    context.assertSystemOnlyDecisions_(['C0002', 'C0001'], decisions)
+  ));
+  const canonicalMap = {
+    C0001: { status: 'INACTIVE' },
+    C0002: {
+      status: 'ACTIVE',
+      contact_verified_at: '2026-07-01 10:00:00',
+      contact_verified_by: 'reviewer@example.com'
+    }
+  };
+  const summary = context.applySystemOnlyDecisions_(
+    canonicalMap,
+    ['C0001', 'C0002'],
+    decisions
+  );
+  assert.equal(canonicalMap.C0001.status, 'ACTIVE');
+  assert.equal(canonicalMap.C0002.status, 'INACTIVE');
+  assert.equal(canonicalMap.C0002.contact_verified_at, '');
+  assert.equal(summary.KEEP_SYSTEM_ONLY, 1);
+  assert.equal(summary.ARCHIVE_EXCLUDE, 1);
+  assert.equal(summary.PENDING, 0);
+  context.__properties.MASTER_SYSTEM_ONLY_DECISIONS = '{"C0001":"DELETE"}';
+  assert.throws(
+    () => context.parseSystemOnlyDecisions_(),
+    error => error.code === 'SYSTEM_ONLY_DECISIONS_INVALID'
+  );
 });
 
 test('式インジェクションとメールヘッダー注入を無害化する', () => {

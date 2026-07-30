@@ -11,6 +11,7 @@
 
 var MASTER_MIGRATION_EXPECTED_ROWS_ = 127;
 var MASTER_REVIEW_STATUSES_ = ['PENDING', 'APPROVED', 'REJECTED'];
+var MASTER_SYSTEM_ONLY_DECISIONS_ = ['KEEP_SYSTEM_ONLY', 'ARCHIVE_EXCLUDE'];
 
 function parseMasterStagingCsv_(csvText) {
   var text = String(csvText || '').replace(/^\uFEFF/, '');
@@ -244,6 +245,83 @@ function nextMigrationCompanyId_(usedIds, cursor) {
   return { id: id, cursor: next };
 }
 
+function parseSystemOnlyDecisions_() {
+  var raw = String(getSecureSetting_('MASTER_SYSTEM_ONLY_DECISIONS') || '').trim();
+  if (!raw) return {};
+  var parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw appError_(
+      'SYSTEM_ONLY_DECISIONS_INVALID',
+      'MASTER_SYSTEM_ONLY_DECISIONSはJSON objectで指定してください',
+      false
+    );
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw appError_(
+      'SYSTEM_ONLY_DECISIONS_INVALID',
+      'MASTER_SYSTEM_ONLY_DECISIONSはJSON objectで指定してください',
+      false
+    );
+  }
+  var decisions = {};
+  Object.keys(parsed).forEach(function(companyId) {
+    var id = String(companyId || '').trim();
+    var decision = String(parsed[companyId] || '').trim().toUpperCase();
+    if (!/^C\d{4,8}$/.test(id) ||
+        MASTER_SYSTEM_ONLY_DECISIONS_.indexOf(decision) < 0) {
+      throw appError_(
+        'SYSTEM_ONLY_DECISIONS_INVALID',
+        'SYSTEM_ONLY判断が不正です: ' + id,
+        false
+      );
+    }
+    decisions[id] = decision;
+  });
+  return decisions;
+}
+
+function assertSystemOnlyDecisions_(systemOnlyIds, decisions) {
+  var expected = (systemOnlyIds || []).slice().sort();
+  var actual = Object.keys(decisions || {}).sort();
+  if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+    throw appError_(
+      'SYSTEM_ONLY_DECISION_REQUIRED',
+      'SYSTEM_ONLY会社ごとの維持・除外判断が一致しません',
+      false
+    );
+  }
+}
+
+function applySystemOnlyDecisions_(canonicalMap, systemOnlyIds, decisions) {
+  var summary = {
+    KEEP_SYSTEM_ONLY: 0,
+    ARCHIVE_EXCLUDE: 0,
+    PENDING: 0
+  };
+  (systemOnlyIds || []).forEach(function(companyId) {
+    var decision = decisions[companyId];
+    if (!decision) {
+      summary.PENDING++;
+      return;
+    }
+    if (decision === 'KEEP_SYSTEM_ONLY') {
+      canonicalMap[companyId].status = 'ACTIVE';
+      summary.KEEP_SYSTEM_ONLY++;
+    } else if (decision === 'ARCHIVE_EXCLUDE') {
+      // company_idとPermit/MLIT参照は保全し、通常画面・送信対象から外す。
+      canonicalMap[companyId].status = 'INACTIVE';
+      canonicalMap[companyId].contact_verified_at = '';
+      canonicalMap[companyId].contact_verified_by = '';
+      summary.ARCHIVE_EXCLUDE++;
+    }
+    canonicalMap[companyId].updated_at = getNowString_();
+    canonicalMap[companyId].updated_by = 'MASTER_MIGRATION';
+  });
+  return summary;
+}
+
 function prepareCanonicalMasterMigration_() {
   var staging = readRecords_(SHEETS.MasterImportStaging);
   var validation = validateMasterStagingRows_(staging);
@@ -323,6 +401,19 @@ function prepareCanonicalMasterMigration_() {
     company.updated_by = 'MASTER_MIGRATION';
   });
 
+  var systemOnlyIds = initialSystemIds.filter(function(id) {
+    return !matchedSystemIds[id];
+  }).sort();
+  var systemOnlyDecisions = parseSystemOnlyDecisions_();
+  var systemOnlyDecisionSummary = applySystemOnlyDecisions_(
+    canonicalMap,
+    systemOnlyIds,
+    systemOnlyDecisions
+  );
+  var pendingSystemOnlyDecisionIds = systemOnlyIds.filter(function(id) {
+    return !systemOnlyDecisions[id];
+  });
+
   var canonical = Object.keys(canonicalMap).sort().map(function(id) {
     var company = canonicalMap[id];
     var clean = {};
@@ -348,9 +439,10 @@ function prepareCanonicalMasterMigration_() {
   if (Object.keys(orphanIds).length > 0) {
     throw appError_('ORPHAN_COMPANY_ID', 'permit参照の孤立company_idがあります', false);
   }
-  var systemOnlyIds = initialSystemIds.filter(function(id) {
-    return !matchedSystemIds[id];
-  }).sort();
+  var activeCount = canonical.filter(function(company) {
+    return String(company.status || 'ACTIVE').toUpperCase() === 'ACTIVE';
+  }).length;
+  var inactiveCount = canonical.length - activeCount;
   return {
     sourceSha256: validation.sourceSha256,
     stagingCount: staging.length,
@@ -359,6 +451,11 @@ function prepareCanonicalMasterMigration_() {
     vendorNoCount: Object.keys(vendorNos).length,
     orphanCompanyIdCount: 0,
     systemOnlyIds: systemOnlyIds,
+    systemOnlyDecisions: systemOnlyDecisions,
+    systemOnlyDecisionSummary: systemOnlyDecisionSummary,
+    pendingSystemOnlyDecisionIds: pendingSystemOnlyDecisionIds,
+    activeCount: activeCount,
+    inactiveCount: inactiveCount,
     canonical: canonical
   };
 }
@@ -373,25 +470,14 @@ function dryRunCanonicalMasterMigration_() {
     vendorNoCount: prepared.vendorNoCount,
     orphanCompanyIdCount: prepared.orphanCompanyIdCount,
     systemOnlyIds: prepared.systemOnlyIds,
-    systemOnlyApprovalProperty: 'MASTER_SYSTEM_ONLY_APPROVED_IDS',
+    systemOnlyDecisions: prepared.systemOnlyDecisions,
+    systemOnlyDecisionSummary: prepared.systemOnlyDecisionSummary,
+    pendingSystemOnlyDecisionIds: prepared.pendingSystemOnlyDecisionIds,
+    activeCount: prepared.activeCount,
+    inactiveCount: prepared.inactiveCount,
+    systemOnlyDecisionProperty: 'MASTER_SYSTEM_ONLY_DECISIONS',
     confirmationRequired: 'APPLY_CANONICAL_' + prepared.sourceSha256.substring(0, 12)
   };
-}
-
-function assertSystemOnlyApproval_(systemOnlyIds) {
-  var expected = (systemOnlyIds || []).slice().sort();
-  var approved = String(getSecureSetting_('MASTER_SYSTEM_ONLY_APPROVED_IDS') || '')
-    .split(',')
-    .map(function(id) { return String(id || '').trim(); })
-    .filter(Boolean)
-    .sort();
-  if (JSON.stringify(expected) !== JSON.stringify(approved)) {
-    throw appError_(
-      'SYSTEM_ONLY_APPROVAL_REQUIRED',
-      'SYSTEM_ONLY会社の承認ID一覧が一致しません',
-      false
-    );
-  }
 }
 
 function assertRecentBackupForMigration_() {
@@ -414,7 +500,10 @@ function applyCanonicalMasterMigration_() {
   try {
     prepared = prepareCanonicalMasterMigration_();
     assertRecentBackupForMigration_();
-    assertSystemOnlyApproval_(prepared.systemOnlyIds);
+    assertSystemOnlyDecisions_(
+      prepared.systemOnlyIds,
+      prepared.systemOnlyDecisions
+    );
     var expectedConfirmation = 'APPLY_CANONICAL_' + prepared.sourceSha256.substring(0, 12);
     if (String(getSecureSetting_('MASTER_IMPORT_APPLY_CONFIRMATION') || '') !== expectedConfirmation) {
       throw appError_(
@@ -478,7 +567,8 @@ function applyCanonicalMasterMigration_() {
         archiveSheet: archiveName,
         canonicalCount: prepared.canonicalCount,
         assignedNewCount: prepared.assignedNewCount,
-        vendorNoCount: prepared.vendorNoCount
+        vendorNoCount: prepared.vendorNoCount,
+        systemOnlyDecisionSummary: prepared.systemOnlyDecisionSummary
       }),
       status: 'COMMITTED'
     });
