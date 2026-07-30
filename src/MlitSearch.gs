@@ -471,6 +471,6 @@ function testMlitSearch_() {
  * GASエディタから実行可能なテスト関数（公開）
  * 関数ドロップダウンに表示される
  */
-function runMlitSearchTest() {
+function runMlitSearchTest_() {
   testMlitSearch_();
 }

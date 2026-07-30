@@ -31,7 +31,7 @@ function loadConfigAll_() {
  * @param {string} key
  * @return {string} 値（未設定時は空文字）
  */
-function getConfig(key) {
+function getConfig_(key) {
   var config = loadConfigAll_();
   return config[key] !== undefined ? config[key] : '';
 }
@@ -50,7 +50,7 @@ function reloadConfigAll_() {
  * 必須キーが全て設定されているか検証する
  * @return {string[]} 未設定のキー一覧（全て揃っていれば空配列）
  */
-function checkConfig() {
+function checkConfig_() {
   var REQUIRED_KEYS = [
     'ADMIN_EMAILS',
     'DRIVE_ROOT_FOLDER_ID',
@@ -71,6 +71,6 @@ function checkConfig() {
 /**
  * キャッシュをクリアする（テスト・再読み込み用）
  */
-function clearConfigCache() {
+function clearConfigCache_() {
   CONFIG_CACHE_ = null;
 }

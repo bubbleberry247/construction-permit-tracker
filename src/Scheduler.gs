@@ -14,7 +14,7 @@ function runDailyNotifications_() {
   try {
     lock.waitLock(60000);
   } catch (lockErr) {
-    logError('runDailyNotifications_ ロック取得失敗（多重実行防止）', lockErr);
+    logError_('runDailyNotifications_ ロック取得失敗（多重実行防止）', lockErr);
     return {
       success: false,
       processed: 0,
@@ -23,48 +23,59 @@ function runDailyNotifications_() {
     };
   }
   try {
-    // 1. NOTIFY_STAGES_DAYS を厳密検証する。不正時は1件も処理しない。
-    var stageDays = parseNotifyStages_(getConfig('NOTIFY_STAGES_DAYS'));
+    // 1. 通知候補だけを生成する。modeが自動送信段階の場合だけ後段で送信する。
+    var candidateResult = generateNotificationCandidates_('SYSTEM_DAILY');
 
-    // 2. 全アクティブ permit 取得
+    // 2. 許可ステータス更新
     var permits = PermitsModel.getAllActive();
     var processed = 0;
     var errors = 0;
 
     permits.forEach(function(permit) {
       try {
-        processPermit_(permit, stageDays);
+        var days = daysUntil_(permit.expiry_date);
+        if (!isNaN(days)) updatePermitStatus_(permit, days);
         processed++;
       } catch (err) {
         errors++;
-        logError('permit処理エラー (permit_id: ' + permit.permit_id + ')', err);
+        logError_('permit処理エラー (permit_id: ' + permit.permit_id + ')', err);
       }
     });
 
     // 3. CompanyView シート更新（会社別集約ビュー）
     try {
-      refreshCompanyView();
+      refreshCompanyView_();
     } catch (err) {
-      logError('CompanyView更新エラー', err);
+      logError_('CompanyView更新エラー', err);
     }
 
-    // 5. 毎月1日に月次サマリー送信
-    if (new Date().getDate() === 1) {
-      Mailer.sendMonthlySummary();
-    }
+    // 4. OFF / 手動modeではattempted=0。自動modeでもpolicy対象だけを最大20件処理する。
+    var autoResult = sendAutoEligibleCandidates_(20);
 
     return {
       success: true,
       processed: processed,
       errors: errors,
-      message: '日次処理が完了しました'
+      candidates: candidateResult,
+      autoSend: autoResult,
+      message: '通知候補生成と期限更新が完了しました'
     };
 
   } catch (err) {
-    logError('runDailyNotifications_ エラー', err);
-    // 通知日数設定が不正な場合は、内部エラー通知も含めてメールを1件も送らない。
-    if (err.code !== 'INVALID_NOTIFY_STAGES') {
-      sendErrorAlert_('日次バッチエラー', err.message + '\n' + (err.stack || ''));
+    logError_('runDailyNotifications_ エラー', err);
+    // エラー時に別経路の自動メールを送らず、実行ログとAuditLogで運用者へ接続する。
+    try {
+      appendAuditEvent_({
+        user_email: 'SYSTEM_DAILY',
+        action: 'DAILY_NOTIFICATION_WORKFLOW',
+        target_type: 'Scheduler',
+        target_id: '',
+        details: String(err.message || err).substring(0, 500),
+        status: 'ABORTED',
+        error_code: String(err.code || 'DAILY_WORKFLOW_FAILED')
+      });
+    } catch (ignoredAuditError) {
+      console.error('[DAILY_AUDIT_FAILED] ' + String(ignoredAuditError.message || ignoredAuditError));
     }
     return {
       success: false,
@@ -83,20 +94,9 @@ function runDailyNotifications_() {
  * @param {number[]} stageDays  降順ソート済みの通知ステージ日数配列
  */
 function processPermit_(permit, stageDays) {
-  var days = daysUntil(permit.expiry_date);
+  var days = daysUntil_(permit.expiry_date);
   if (isNaN(days)) return;
-
-  // 通知ステージ判定（累積方式: determineStage_ 内で未送信チェック済み）
-  var stage = determineStage_(days, stageDays, permit.permit_id);
-
-  if (stage !== null) {
-    var company = CompaniesModel.findById(permit.company_id);
-    if (company) {
-      Mailer.sendExpiryNotification(permit, company, stage);
-    }
-  }
-
-  // ステータス更新
+  // 後方互換private関数。送信は行わず、通知候補生成と配信を分離する。
   updatePermitStatus_(permit, days);
 }
 
@@ -179,7 +179,7 @@ function runNow_() {
       '期限チェック完了',
       '処理件数: ' + result.processed + '件\n' +
         '個別エラー: ' + result.errors + '件\n' +
-        'Notificationsシートをご確認ください。',
+        'NotificationQueueをご確認ください。',
       ui.ButtonSet.OK
     );
   } else {

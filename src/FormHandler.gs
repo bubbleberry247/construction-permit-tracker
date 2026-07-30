@@ -6,12 +6,12 @@
  * フォーム送信時に呼び出されるメイン関数
  * @param {Object} e  フォームトリガーイベントオブジェクト
  */
-function onFormSubmit(e) {
+function onFormSubmit_(e) {
   var lock = LockService.getDocumentLock();
   try {
     lock.waitLock(30000);
   } catch (lockErr) {
-    logError('onFormSubmit ロック取得失敗（同時実行制御）', lockErr);
+    logError_('onFormSubmit_ ロック取得失敗（同時実行制御）', lockErr);
     sendErrorAlert_('フォーム処理ロック取得失敗', 'フォーム送信の同時処理でロック取得に失敗しました。手動確認が必要です。');
     return;
   }
@@ -28,7 +28,7 @@ function onFormSubmit(e) {
     }
   }
 
-  var submissionId = generateUuid();
+  var submissionId = generateUuid_();
   var submittedAt = new Date();
 
   // 1. フォーム回答を取得
@@ -71,16 +71,16 @@ function onFormSubmit(e) {
 
   try {
     // 3. バリデーション
-    var expiryDate = parseDate(expiryDateRaw);
+    var expiryDate = parseDate_(expiryDateRaw);
     if (!expiryDate) {
       throw new Error('満了日の形式が不正です: ' + expiryDateRaw);
     }
-    var daysLeft = daysUntil(expiryDate);
+    var daysLeft = daysUntil_(expiryDate);
     if (daysLeft < -180) {
       throw new Error('満了日が180日以上前です（古すぎるデータ）: ' + expiryDateRaw);
     }
 
-    var issueDate = parseDate(issueDateRaw);
+    var issueDate = parseDate_(issueDateRaw);
 
     // 許可番号をパースして構造化データを取得
     var parsed = parsePermitNumber_(permitNumberRaw);
@@ -182,7 +182,7 @@ function onFormSubmit(e) {
     if (permitFileId) {
       try {
         var permitFile = DriveApp.getFileById(permitFileId);
-        var rootFolderId = getConfig('DRIVE_ROOT_FOLDER_ID');
+        var rootFolderId = getConfig_('DRIVE_ROOT_FOLDER_ID');
         var rootFolder = DriveApp.getFolderById(rootFolderId);
 
         // 会社別フォルダを取得 or 作成
@@ -195,7 +195,7 @@ function onFormSubmit(e) {
         }
 
         // リネーム
-        var expiryStr = formatDate(expiryDate, 'yyyyMMdd');
+        var expiryStr = formatDate_(expiryDate, 'yyyyMMdd');
         var newFileName = companyNameRaw + '_建設業許可_' + permitNumberRaw +
                           '_満了' + expiryStr + '_v' + permitVersion + '.pdf';
         permitFile.setName(newFileName);
@@ -205,7 +205,7 @@ function onFormSubmit(e) {
 
         permitFileUrl = permitFile.getUrl();
       } catch (fileErr) {
-        logError('PDFファイル移動エラー', fileErr);
+        logError_('PDFファイル移動エラー', fileErr);
         pdfSaveFailed = true;
       }
     }
@@ -241,7 +241,7 @@ function onFormSubmit(e) {
           evidence_file_path:           evidenceFileUrl
         });
       } catch (evErr) {
-        logError('受付票ファイル取得エラー', evErr);
+        logError_('受付票ファイル取得エラー', evErr);
       }
     }
 
@@ -268,11 +268,11 @@ function onFormSubmit(e) {
         Mailer.sendReceiptConfirmation(finalPermit, finalCompany);
       }
     } catch (mailErr) {
-      logError('受領確認メール送信エラー（処理自体は成功）', mailErr);
+      logError_('受領確認メール送信エラー（処理自体は成功）', mailErr);
     }
 
   } catch (err) {
-    logError('onFormSubmit エラー', err);
+    logError_('onFormSubmit_ エラー', err);
 
     // Submissions を NG で更新
     SubmissionsModel.updateById(submissionId, {

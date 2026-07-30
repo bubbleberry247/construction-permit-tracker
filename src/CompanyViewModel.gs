@@ -25,7 +25,7 @@ var COMPANY_VIEW_HEADERS = [
  * CompanyView シートを再生成する
  * 既存シートをクリアして全行を書き直す
  */
-function refreshCompanyView() {
+function refreshCompanyView_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
   var sheet = ss.getSheetByName('CompanyView');
@@ -136,12 +136,12 @@ function aggregateCompanyRow_(companyId, permits) {
   return {
     '会社名':       companyName,
     '最悪ステータス': worstStatus,
-    '最短満了日':   formatDate(parseDate(nearestExpiry), 'yyyy/MM/dd') || '',
+    '最短満了日':   formatDate_(parseDate_(nearestExpiry), 'yyyy/MM/dd') || '',
     '残日数':       daysLeft === 9999 ? '' : daysLeft,
     '許可件数':     permitCount,
     '要確認件数':   reviewCount,
     '不備件数':     deficientCount,
-    '最短更新期限': formatDate(parseDate(nearestRenewalDeadline), 'yyyy/MM/dd') || '',
+    '最短更新期限': formatDate_(parseDate_(nearestRenewalDeadline), 'yyyy/MM/dd') || '',
     '担当者':       contactPerson
   };
 }
@@ -212,17 +212,6 @@ function worseStatus_(a, b) {
   var pa = STATUS_PRIORITY[a] || 0;
   var pb = STATUS_PRIORITY[b] || 0;
   return pb > pa ? b : a;
-}
-
-/**
- * 今日から date までの日数を返す（過去はマイナス）
- * 欠損・無効日付は NaN を返す
- * @param {string|Date} date
- * @return {number}
- */
-function daysUntil_(date) {
-  // Utils.gs の daysUntil() を再利用
-  return daysUntil(date);
 }
 
 /**

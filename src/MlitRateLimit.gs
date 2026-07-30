@@ -107,7 +107,7 @@ function withMlitRateLimit_(fn, opts) {
  * 緊急用: rate limit 予約をリセット（ScriptProperties から削除）
  * 起動直後など「予約が古すぎる」場合の救済
  */
-function resetMlitRateLimit() {
+function resetMlitRateLimit_() {
   PropertiesService.getScriptProperties().deleteProperty(MLIT_RATE_LIMIT_KEY_);
   Logger.log('MLIT rate limit 予約をリセットしました');
 }

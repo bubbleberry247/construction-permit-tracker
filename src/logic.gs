@@ -22,7 +22,7 @@ function normalizeStoredDaysRemaining_(daysLeft) {
 }
 
 function resolveDaysRemaining_(expiryDate, storedDaysLeft) {
-  var liveDays = daysUntil(expiryDate);
+  var liveDays = daysUntil_(expiryDate);
   if (!isNaN(liveDays)) return liveDays;
   return normalizeStoredDaysRemaining_(storedDaysLeft);
 }

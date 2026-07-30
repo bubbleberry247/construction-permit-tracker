@@ -7,7 +7,9 @@
     "pull": "clasp pull",
     "deploy": "clasp push && clasp deploy",
     "open": "clasp open",
-    "test:phase0-p1": "node tests/test_phase0_p1.js"
+    "test:phase0-p1": "node tests/test_phase0_p1.js",
+    "test:secure-master": "node tests/test_secure_master.js",
+    "test:gas": "npm run test:phase0-p1 && npm run test:secure-master"
   },
   "devDependencies": {
     "@google/clasp": "^2.4.2"

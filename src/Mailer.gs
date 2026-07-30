@@ -20,33 +20,32 @@ var Mailer = {
   },
 
   /**
-   * 期限通知メールを送信する
+   * 期限通知の宛先・件名・本文を生成する。ここでは送信しない。
    * @param {Object} permit
    * @param {Object} company
    * @param {string} stage
+   * @return {Object}
    */
-  sendExpiryNotification: function(permit, company, stage) {
-    var adminEmails = getConfig('ADMIN_EMAILS');
-    var formId = getConfig('FORM_ID');
-
-    var expiryDateStr = formatDate(
-      permit.expiry_date instanceof Date ? permit.expiry_date : parseDate(permit.expiry_date),
+  buildExpiryNotification: function(permit, company, stage) {
+    var adminEmails = getConfig_('ADMIN_EMAILS');
+    var formId = getConfig_('FORM_ID');
+    var expiryDateStr = formatDate_(
+      permit.expiry_date instanceof Date ? permit.expiry_date : parseDate_(permit.expiry_date),
       'yyyy/MM/dd'
     );
-
     var subject = '【重要】建設業許可 更新手続のお願い（満了日：' + expiryDateStr + '）';
-
-    var formUrl = formId ? 'https://docs.google.com/forms/d/' + formId + '/viewform' : '（フォームURL未設定）';
-    var contactInfo = getConfig('CONTACT_INFO') || '本メールの送信元までご連絡ください';
-
+    var formUrl = formId
+      ? 'https://docs.google.com/forms/d/' + formId + '/viewform'
+      : '（フォームURL未設定）';
+    var contactInfo = getConfig_('CONTACT_INFO') || '本メールの送信元までご連絡ください';
     var stageMessage = this._getStageMessage(stage);
-
+    var companyName = company.company_name_normalized || company.company_name_raw || '';
     var body =
-      (company.company_name_normalized || company.company_name_raw) + ' ' + (company.contact_person || '') + ' 様\n\n' +
+      companyName + ' ' + (company.contact_person || '') + ' 様\n\n' +
       'いつもお世話になっております。\n' +
       '建設業許可証の更新に関してご連絡いたします。\n\n' +
       '■ 許可証情報\n' +
-      '　会社名：' + (company.company_name_normalized || company.company_name_raw) + '\n' +
+      '　会社名：' + companyName + '\n' +
       '　許可番号：' + permit.permit_number_full + '\n' +
       '　満了日：' + expiryDateStr + '\n\n' +
       '■ ご連絡内容\n' +
@@ -57,44 +56,41 @@ var Mailer = {
       contactInfo + '\n\n' +
       '何卒よろしくお願いいたします。';
 
-    // CC の組み立て（協力会社の CC のみ）
-    var ccList = [];
-    if (company.contact_email_cc) ccList.push(company.contact_email_cc);
-
-    // BCC の組み立て（管理者メールは BCC で送信し、外部に漏れないようにする）
+    var ccList = normalizeEmailRecipients_(company.contact_email_cc);
     var bccList = [];
     var stageNum = parseInt(String(stage), 10);
     var isHighAlert = stage === 'EXPIRED' || (!isNaN(stageNum) && stageNum <= 30);
-    if (isHighAlert && adminEmails) {
-      adminEmails.split(',').forEach(function(e) {
-        var trimmed = e.trim();
-        if (trimmed) bccList.push(trimmed);
-      });
-    }
+    if (isHighAlert) bccList = normalizeEmailRecipients_(adminEmails);
 
-    var notificationData = {
-      company_id: company.company_id,
-      permit_id:  permit.permit_id,
-      to_email:   company.contact_email,
-      cc_email:   ccList.join(','),
-      bcc_email:  bccList.join(','),
-      stage:      String(stage),
-      subject:    subject,
-      body:       body,
-      result:     '',
-      error_message: ''
-    };
-
-    var mailOptions = {};
-    if (ccList.length > 0) mailOptions.cc = ccList.join(',');
-    if (bccList.length > 0) mailOptions.bcc = bccList.join(',');
-
-    return sendSystemEmail_({
-      to: company.contact_email,
+    return {
+      company_id: String(company.company_id || ''),
+      permit_id: String(permit.permit_id || ''),
+      to_email: normalizeEmailAddress_(company.contact_email),
+      cc_email: ccList.join(','),
+      bcc_email: bccList.join(','),
+      stage: String(stage),
       subject: subject,
-      body: body,
+      body: body
+    };
+  },
+
+  /**
+   * 期限通知メールを送信する
+   * @param {Object} permit
+   * @param {Object} company
+   * @param {string} stage
+   */
+  sendExpiryNotification: function(permit, company, stage) {
+    var built = this.buildExpiryNotification(permit, company, stage);
+    var mailOptions = {};
+    if (built.cc_email) mailOptions.cc = built.cc_email;
+    if (built.bcc_email) mailOptions.bcc = built.bcc_email;
+    return sendSystemEmail_({
+      to: built.to_email,
+      subject: built.subject,
+      body: built.body,
       options: mailOptions,
-      notification: notificationData
+      notification: Object.assign({}, built, { result: '', error_message: '' })
     });
   },
 
@@ -104,10 +100,10 @@ var Mailer = {
    * @param {Object} company
    */
   sendReceiptConfirmation: function(permit, company) {
-    var adminEmails = getConfig('ADMIN_EMAILS');
+    var adminEmails = getConfig_('ADMIN_EMAILS');
 
-    var expiryDateStr = formatDate(
-      permit.expiry_date instanceof Date ? permit.expiry_date : parseDate(permit.expiry_date),
+    var expiryDateStr = formatDate_(
+      permit.expiry_date instanceof Date ? permit.expiry_date : parseDate_(permit.expiry_date),
       'yyyy/MM/dd'
     );
 
@@ -116,9 +112,9 @@ var Mailer = {
     // 次回通知予定ステージを算出
     var stageDays;
     try {
-      stageDays = parseNotifyStages_(getConfig('NOTIFY_STAGES_DAYS'));
+      stageDays = parseNotifyStages_(getConfig_('NOTIFY_STAGES_DAYS'));
     } catch (stageErr) {
-      logError('受領確認メール停止: NOTIFY_STAGES_DAYS不正', stageErr);
+      logError_('受領確認メール停止: NOTIFY_STAGES_DAYS不正', stageErr);
       return recordBlockedNotification_({
         company_id: company.company_id,
         permit_id: permit.permit_id,
@@ -129,12 +125,12 @@ var Mailer = {
         body: ''
       }, 'BLOCKED_INVALID_STAGES', stageErr.message || String(stageErr));
     }
-    var days = daysUntil(permit.expiry_date);
+    var days = daysUntil_(permit.expiry_date);
     var nextStage = '（算出不可）';
     for (var i = 0; i < stageDays.length; i++) {
       if (days > stageDays[i]) {
         nextStage = '満了' + stageDays[i] + '日前（約 ' +
-          formatDate(new Date(new Date().getTime() + (days - stageDays[i]) * 86400000), 'yyyy/MM/dd') + '）';
+          formatDate_(new Date(new Date().getTime() + (days - stageDays[i]) * 86400000), 'yyyy/MM/dd') + '）';
         break;
       }
     }
@@ -184,7 +180,7 @@ var Mailer = {
     var subject = '【テスト】建設業許可証管理システム テスト送信';
     var body =
       'このメールは建設業許可証管理システムのテスト送信です。\n\n' +
-      '送信日時: ' + formatDate(new Date(), 'yyyy/MM/dd HH:mm:ss') + '\n\n' +
+      '送信日時: ' + formatDate_(new Date(), 'yyyy/MM/dd HH:mm:ss') + '\n\n' +
       '正常に受信できていれば、メール送信設定は正しく動作しています。';
 
     return sendSystemEmail_({
@@ -192,6 +188,7 @@ var Mailer = {
       subject: subject,
       body: body,
       options: {},
+      sendOrigin: 'SYSTEM_INTERNAL',
       notification: {
         company_id: '',
         permit_id: '',
@@ -208,7 +205,7 @@ var Mailer = {
    * 月次サマリーメールを ADMIN_EMAILS に送信する
    */
   sendMonthlySummary: function() {
-    var adminEmails = getConfig('ADMIN_EMAILS');
+    var adminEmails = getConfig_('ADMIN_EMAILS');
     if (!adminEmails) return;
 
     var permits = PermitsModel.getAllActive();
@@ -216,17 +213,17 @@ var Mailer = {
 
     // 90日以内の許可証を抽出
     var nearExpiry = permits.filter(function(p) {
-      var d = daysUntil(p.expiry_date);
+      var d = daysUntil_(p.expiry_date);
       return !isNaN(d) && d <= 90;
     }).sort(function(a, b) {
-      return daysUntil(a.expiry_date) - daysUntil(b.expiry_date);
+      return daysUntil_(a.expiry_date) - daysUntil_(b.expiry_date);
     });
 
     var subject = '【月次レポート】建設業許可 期限接近一覧';
 
     var lines = [
       '■ 期限90日以内の許可証一覧',
-      '集計日: ' + formatDate(today, 'yyyy/MM/dd'),
+      '集計日: ' + formatDate_(today, 'yyyy/MM/dd'),
       '件数: ' + nearExpiry.length + '件',
       '',
       ['会社名', '許可番号', '満了日', '残日数', 'ステータス'].join('\t')
@@ -235,11 +232,11 @@ var Mailer = {
     nearExpiry.forEach(function(p) {
       var company = CompaniesModel.findById(p.company_id);
       var companyName = company ? (company.company_name_normalized || company.company_name_raw) : p.company_id;
-      var expiryStr = formatDate(
-        p.expiry_date instanceof Date ? p.expiry_date : parseDate(p.expiry_date),
+      var expiryStr = formatDate_(
+        p.expiry_date instanceof Date ? p.expiry_date : parseDate_(p.expiry_date),
         'yyyy/MM/dd'
       );
-      var d = daysUntil(p.expiry_date);
+      var d = daysUntil_(p.expiry_date);
       var daysStr = isNaN(d) ? '不明' : (d < 0 ? '期限切れ(' + Math.abs(d) + '日経過)' : d + '日');
       lines.push([companyName, p.permit_number_full, expiryStr, daysStr, p.current_status || ''].join('\t'));
     });
@@ -254,7 +251,7 @@ var Mailer = {
     if (recipients.length > 1) mailOptions.cc = recipients.slice(1).join(',');
     // permit_id列を非permit通知の冪等キーにも利用する。
     // 同じ月のPENDING/SENTがあれば中央送信ゲートが自動再送を止める。
-    var monthlyIdempotencyKey = 'MONTHLY:' + formatDate(today, 'yyyy-MM');
+    var monthlyIdempotencyKey = 'MONTHLY:' + formatDate_(today, 'yyyy-MM');
 
     return sendSystemEmail_({
       to: recipients[0],

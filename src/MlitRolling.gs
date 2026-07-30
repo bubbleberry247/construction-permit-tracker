@@ -55,12 +55,12 @@ function isMlitRollingPaused_() {
   return String(v || '').toLowerCase() === 'true';
 }
 
-function pauseMlitRolling() {
+function pauseMlitRolling_() {
   PropertiesService.getScriptProperties().setProperty(MLIT_ROLLING_PAUSE_KEY_, 'true');
   Logger.log('MLIT rolling は一時停止されました');
 }
 
-function resumeMlitRolling() {
+function resumeMlitRolling_() {
   PropertiesService.getScriptProperties().deleteProperty(MLIT_ROLLING_PAUSE_KEY_);
   Logger.log('MLIT rolling は再開されました');
 }
@@ -272,9 +272,9 @@ function refreshOneMlitPermit_(permit) {
  * Note: ScriptLock は使わない（withMlitRateLimit_ が短時間ロック取るのみ）。
  *       多重起動防止は trigger 側設計+冪等性に依存。
  */
-function runDailyMlitRolling() {
+function runDailyMlitRolling_() {
   if (isMlitRollingPaused_()) {
-    Logger.log('runDailyMlitRolling: kill switch ON のため停止');
+    Logger.log('runDailyMlitRolling_: kill switch ON のため停止');
     return;
   }
 
@@ -289,14 +289,14 @@ function runDailyMlitRolling() {
   );
 
   var candidates = pickMlitRollingCandidates_(dailyLimit, maxStaleDays);
-  Logger.log('runDailyMlitRolling: 候補 ' + candidates.length + ' 件 (limit=' + dailyLimit + ', stale=' + maxStaleDays + 'days)');
+  Logger.log('runDailyMlitRolling_: 候補 ' + candidates.length + ' 件 (limit=' + dailyLimit + ', stale=' + maxStaleDays + 'days)');
 
   var counts = { '一致': 0, '不一致': 0, '確認不可': 0 };
   var startTs = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
 
   for (var i = 0; i < candidates.length; i++) {
     if (isMlitRollingPaused_()) {
-      Logger.log('runDailyMlitRolling: ループ内で kill switch を検出、' + i + '/' + candidates.length + ' で中断');
+      Logger.log('runDailyMlitRolling_: ループ内で kill switch を検出、' + i + '/' + candidates.length + ' で中断');
       break;
     }
 
@@ -330,7 +330,7 @@ function runDailyMlitRolling() {
   );
 
   Logger.log(
-    'runDailyMlitRolling 完了: 一致=' + counts['一致'] +
+    'runDailyMlitRolling_ 完了: 一致=' + counts['一致'] +
     ', 不一致=' + counts['不一致'] +
     ', 確認不可=' + counts['確認不可']
   );
@@ -343,7 +343,7 @@ function runDailyMlitRolling() {
 /**
  * 候補選択だけを試す（GAS エディタから手動実行）
  */
-function debugPickMlitRollingCandidates() {
+function debugPickMlitRollingCandidates_() {
   var candidates = pickMlitRollingCandidates_(
     MLIT_ROLLING_DEFAULTS_.DAILY_LIMIT,
     MLIT_ROLLING_DEFAULTS_.MAX_STALE_DAYS
@@ -362,7 +362,7 @@ function debugPickMlitRollingCandidates() {
  * 1件だけ手動で再確認（GAS エディタから company_id 指定で実行）
  * @param {string} companyId
  */
-function debugRefreshOneByCompanyId(companyId) {
+function debugRefreshOneByCompanyId_(companyId) {
   var permit = findByKey_(SHEETS.MLITPermits, 'company_id', companyId);
   if (!permit) {
     Logger.log('company_id=' + companyId + ' の MLITPermits 行が見つかりません');
@@ -377,26 +377,26 @@ function debugRefreshOneByCompanyId(companyId) {
 // ---------------------------------------------------------------------------
 
 /**
- * runDailyMlitRolling の time-driven trigger を毎日 02:00-03:00 で登録する。
+ * runDailyMlitRolling_ の time-driven trigger を毎日 02:00-03:00 で登録する。
  * 既に同名 trigger があれば一旦削除してから登録（冪等）。
  *
  * 実行方法:
- *   - GAS エディタ: 関数 setupMlitRollingTrigger を選んで Run
- *   - clasp run: clasp run setupMlitRollingTrigger
+ *   - GAS エディタ: 関数 setupMlitRollingTrigger_ を選んで Run
+ *   - clasp run: clasp run setupMlitRollingTrigger_
  *
  * @return {Object} {removed: 削除数, created: trigger ID}
  */
-function setupMlitRollingTrigger() {
+function setupMlitRollingTrigger_() {
   var existingTriggers = ScriptApp.getProjectTriggers();
   var removed = 0;
   existingTriggers.forEach(function(t) {
-    if (t.getHandlerFunction() === 'runDailyMlitRolling') {
+    if (t.getHandlerFunction() === 'runDailyMlitRolling_') {
       ScriptApp.deleteTrigger(t);
       removed++;
     }
   });
 
-  var newTrigger = ScriptApp.newTrigger('runDailyMlitRolling')
+  var newTrigger = ScriptApp.newTrigger('runDailyMlitRolling_')
     .timeBased()
     .atHour(2)            // 午前 2 時台に起動（GAS 内部で 2:00-3:00 のいずれか）
     .everyDays(1)
@@ -405,17 +405,17 @@ function setupMlitRollingTrigger() {
   var info = {
     removed: removed,
     created: newTrigger.getUniqueId(),
-    handler: 'runDailyMlitRolling',
+    handler: 'runDailyMlitRolling_',
     schedule: 'everyDays(1) at hour 2'
   };
-  Logger.log('setupMlitRollingTrigger 完了: ' + JSON.stringify(info));
+  Logger.log('setupMlitRollingTrigger_ 完了: ' + JSON.stringify(info));
   return info;
 }
 
 /**
  * 現在登録されている trigger を一覧表示（debug 用）
  */
-function listProjectTriggers() {
+function listProjectTriggers_() {
   var triggers = ScriptApp.getProjectTriggers();
   Logger.log('登録 trigger 数: ' + triggers.length);
   triggers.forEach(function(t, i) {

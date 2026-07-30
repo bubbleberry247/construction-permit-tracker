@@ -52,7 +52,7 @@ function createUtilsContext(configOverrides) {
       warn: (...args) => consoleMessages.push(['warn', ...args]),
       log: (...args) => consoleMessages.push(['log', ...args])
     },
-    getConfig: key => Object.prototype.hasOwnProperty.call(config, key) ? config[key] : '',
+    getConfig_: key => Object.prototype.hasOwnProperty.call(config, key) ? config[key] : '',
     reloadConfigAll_: () => Object.assign({}, config),
     NotificationsModel: {
       create(data) {
@@ -105,7 +105,7 @@ function createUtilsContext(configOverrides) {
         format === 'yyyy-MM' ? '2026-07' : '2026/07/30'
     }
   };
-  context.logError = (message, error) => {
+  context.logError_ = (message, error) => {
     consoleMessages.push(['logError', message, error && error.message]);
   };
   context.__state = {
@@ -208,7 +208,7 @@ test('ロック待機中にENABLE_SENDがTRUEからFALSEへ変わった場合は
   vm.runInContext(readSource('Config.gs'), context, { filename: 'Config.gs' });
 
   // 最初の判定が読む実行内キャッシュにはTRUEを保持させる。
-  assert.equal(context.getConfig('ENABLE_SEND'), 'TRUE');
+  assert.equal(context.getConfig_('ENABLE_SEND'), 'TRUE');
   context.LockService = {
     getScriptLock: () => ({
       tryLock() {
@@ -652,7 +652,7 @@ test('不正な通知日数では日次処理を1件も開始しない', () => {
     }
   };
   context.Mailer = { sendMonthlySummary() {} };
-  context.refreshCompanyView = () => {};
+  context.refreshCompanyView_ = () => {};
   context.sendErrorAlert_ = () => {
     alertCalls++;
   };

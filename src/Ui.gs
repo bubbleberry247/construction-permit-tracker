@@ -5,12 +5,12 @@
 /**
  * スプレッドシートを開いたときにカスタムメニューを追加する
  */
-function onOpen() {
+function onOpen_() {
   SpreadsheetApp.getUi()
     .createMenu('許可証管理')
     .addItem('期限チェックを今すぐ実行', 'runNow_')
-    .addItem('設定チェック', 'checkConfigMenu')
-    .addItem('会社ビュー更新', 'refreshCompanyViewMenu')
+    .addItem('設定チェック', 'checkConfigMenu_')
+    .addItem('会社ビュー更新', 'refreshCompanyViewMenu_')
     .addToUi();
 }
 
@@ -21,7 +21,7 @@ function onOpen() {
 function promptAndSendTestEmail_() {
   var ui = SpreadsheetApp.getUi();
   var currentEmail = String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
-  var adminEmails = normalizeEmailRecipients_(getConfig('ADMIN_EMAILS')).map(function(email) {
+  var adminEmails = normalizeEmailRecipients_(getConfig_('ADMIN_EMAILS')).map(function(email) {
     return email.toLowerCase();
   });
   if (!currentEmail || adminEmails.indexOf(currentEmail) < 0) {
@@ -72,10 +72,10 @@ function promptAndSendTestEmail_() {
 /**
  * 設定値の検証結果をダイアログ表示する
  */
-function checkConfigMenu() {
+function checkConfigMenu_() {
   var ui = SpreadsheetApp.getUi();
-  clearConfigCache();
-  var missing = checkConfig();
+  clearConfigCache_();
+  var missing = checkConfig_();
   if (missing.length === 0) {
     ui.alert('設定チェック OK', '全ての必須設定が確認できました。', ui.ButtonSet.OK);
   } else {
@@ -90,10 +90,10 @@ function checkConfigMenu() {
 /**
  * メニューから CompanyView シートを手動更新する
  */
-function refreshCompanyViewMenu() {
+function refreshCompanyViewMenu_() {
   var ui = SpreadsheetApp.getUi();
   try {
-    refreshCompanyView();
+    refreshCompanyView_();
     ui.alert('完了', '会社ビューを更新しました。CompanyViewシートをご確認ください。', ui.ButtonSet.OK);
   } catch (err) {
     ui.alert('エラー', '会社ビューの更新中にエラーが発生しました:\n' + err.message, ui.ButtonSet.OK);
@@ -134,7 +134,7 @@ function setupDailyTrigger_() {
 /**
  * 全5シートのヘッダ行を一括設定する
  */
-function initSheetHeaders() {
+function initSheetHeaders_() {
   var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 

@@ -256,7 +256,7 @@ var PermitsModel = {
   create: function(data) {
     var sheet = this.getSheet();
     var now = new Date();
-    data.permit_id = data.permit_id || generateUuid();
+    data.permit_id = data.permit_id || generateUuid_();
     data.current_status = data.current_status || 'VALID';
     data.evidence_renewal_application = data.evidence_renewal_application || false;
     data.parse_status = data.parse_status || 'OK';
@@ -308,7 +308,7 @@ var SubmissionsModel = {
 
   create: function(data) {
     var sheet = this.getSheet();
-    data.submission_id = data.submission_id || generateUuid();
+    data.submission_id = data.submission_id || generateUuid_();
     data.submitted_at = data.submitted_at || new Date();
     appendRow_(sheet, SUBMISSIONS_HEADERS, data);
     return data;
@@ -347,7 +347,9 @@ var SubmissionsModel = {
 
 var NOTIFICATIONS_HEADERS = [
   'notification_id', 'sent_at', 'company_id', 'permit_id',
-  'to_email', 'cc_email', 'stage', 'subject', 'body', 'result', 'error_message'
+  'to_email', 'cc_email', 'stage', 'subject', 'body', 'result', 'error_message',
+  'bcc_email', 'queue_id', 'idempotency_key', 'initiated_by',
+  'send_origin', 'recipient_count', 'notification_mode'
 ];
 
 var NotificationsModel = {
@@ -359,8 +361,15 @@ var NotificationsModel = {
 
   create: function(data) {
     var sheet = this.getSheet();
-    data.notification_id = data.notification_id || generateUuid();
+    ensureHeaders_(sheet, NOTIFICATIONS_HEADERS);
+    data.notification_id = data.notification_id || generateUuid_();
     data.sent_at = data.sent_at || new Date();
+    if (!data.recipient_count) {
+      data.recipient_count = countEmailRecipients_(
+        data.to_email,
+        { cc: data.cc_email, bcc: data.bcc_email }
+      );
+    }
     appendRow_(sheet, NOTIFICATIONS_HEADERS, data);
     return data;
   },
@@ -392,6 +401,19 @@ var NotificationsModel = {
     return this.hasBeenReservedOrSent(permitId, stage);
   },
 
+  hasBeenReservedOrSentByIdempotency: function(idempotencyKey) {
+    var key = String(idempotencyKey || '').trim();
+    if (!key) return false;
+    var rows = sheetToObjects_(this.getSheet());
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].idempotency_key || '') === key &&
+          ['PENDING', 'SENT'].indexOf(String(rows[i].result || '')) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  },
+
   /**
    * notification_id で行を検索し、指定カラムを更新する
    * @param {string} notificationId
@@ -417,12 +439,12 @@ var NotificationsModel = {
   countSentToday: function() {
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
-    var today = formatDate(new Date(), 'yyyy/MM/dd');
+    var today = formatDate_(new Date(), 'yyyy/MM/dd');
     var count = 0;
     rows.forEach(function(r) {
       if (String(r.result) === 'SENT') {
         var sentAt = r.sent_at;
-        var sentDate = formatDate(sentAt instanceof Date ? sentAt : new Date(sentAt), 'yyyy/MM/dd');
+        var sentDate = formatDate_(sentAt instanceof Date ? sentAt : new Date(sentAt), 'yyyy/MM/dd');
         if (sentDate === today) count++;
       }
     });
@@ -437,15 +459,43 @@ var NotificationsModel = {
   countReservedOrSentToday: function() {
     var sheet = this.getSheet();
     var rows = sheetToObjects_(sheet);
-    var today = formatDate(new Date(), 'yyyy/MM/dd');
+    var today = formatDate_(new Date(), 'yyyy/MM/dd');
     var count = 0;
     rows.forEach(function(r) {
       var result = String(r.result);
       if (result === 'PENDING' || result === 'SENT') {
         var sentAt = r.sent_at;
-        var sentDate = formatDate(sentAt instanceof Date ? sentAt : new Date(sentAt), 'yyyy/MM/dd');
+        var sentDate = formatDate_(sentAt instanceof Date ? sentAt : new Date(sentAt), 'yyyy/MM/dd');
         if (sentDate === today) count++;
       }
+    });
+    return count;
+  },
+
+  /**
+   * 今日のPENDING/SENTが予約済みの受信者数を返す。
+   */
+  countReservedOrSentRecipientsToday: function() {
+    var sheet = this.getSheet();
+    var rows = sheetToObjects_(sheet);
+    var today = formatDate_(new Date(), 'yyyy/MM/dd');
+    var count = 0;
+    rows.forEach(function(r) {
+      var result = String(r.result || '');
+      if (result !== 'PENDING' && result !== 'SENT') return;
+      var sentAt = r.sent_at;
+      var sentDate = formatDate_(
+        sentAt instanceof Date ? sentAt : new Date(sentAt),
+        'yyyy/MM/dd'
+      );
+      if (sentDate !== today) return;
+      var storedCount = Number(r.recipient_count);
+      count += Number.isInteger(storedCount) && storedCount > 0
+        ? storedCount
+        : countEmailRecipients_(
+          r.to_email,
+          { cc: r.cc_email, bcc: r.bcc_email }
+        );
     });
     return count;
   }
@@ -473,7 +523,7 @@ var DocumentChecklistModel = {
   create: function(data) {
     var sheet = this.getSheet();
     var now = new Date();
-    data.check_id = data.check_id || generateUuid();
+    data.check_id = data.check_id || generateUuid_();
     data.created_at = now;
     data.updated_at = now;
     appendRow_(sheet, DOCUMENT_CHECKLIST_HEADERS, data);

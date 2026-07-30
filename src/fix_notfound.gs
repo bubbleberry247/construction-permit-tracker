@@ -1,7 +1,7 @@
 /**
  * fix_notfound.gs — NOT_FOUND 3社の修正（1回実行用）
  *
- * 実行方法: GASエディタから fixNotFoundCompanies() を選択して実行
+ * 実行方法: GASエディタから fixNotFoundCompanies_() を選択して実行
  *
  * 修正内容:
  *   C0041 (タイト)     → fetch_status: DUPLICATE_DELETE  (チルトC0068の重複)
@@ -13,7 +13,7 @@
  * 実行日: 2026-03-31 (Python gspread で直接適用済み。GAS版は再確認用)
  */
 
-function fixNotFoundCompanies() {
+function fixNotFoundCompanies_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var results = [];
 

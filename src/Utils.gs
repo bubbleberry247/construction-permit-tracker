@@ -6,7 +6,7 @@
  * UUID v4 を生成する
  * @return {string}
  */
-function generateUuid() {
+function generateUuid_() {
   return Utilities.getUuid();
 }
 
@@ -16,7 +16,7 @@ function generateUuid() {
  * @param {string} fmt  例: 'yyyy/MM/dd'
  * @return {string}
  */
-function formatDate(date, fmt) {
+function formatDate_(date, fmt) {
   if (!date || !(date instanceof Date) || isNaN(date.getTime())) return '';
   return Utilities.formatDate(date, 'Asia/Tokyo', fmt);
 }
@@ -26,7 +26,7 @@ function formatDate(date, fmt) {
  * @param {string|Date} str  "YYYY/MM/DD" or "YYYY-MM-DD" またはすでに Date
  * @return {Date|null}  無効な場合は null
  */
-function parseDate(str) {
+function parseDate_(str) {
   if (!str) return null;
   if (str instanceof Date) {
     return isNaN(str.getTime()) ? null : str;
@@ -44,8 +44,8 @@ function parseDate(str) {
  * @param {Date|string} targetDate
  * @return {number}
  */
-function daysUntil(targetDate) {
-  var target = parseDate(targetDate);
+function daysUntil_(targetDate) {
+  var target = parseDate_(targetDate);
   if (!target) return NaN;
   var now = new Date();
   // 時刻部分を除いて日付だけで計算
@@ -61,9 +61,14 @@ function daysUntil(targetDate) {
  * @return {boolean}
  */
 function isSendEnabled_(configSnapshot) {
+  // Phase 0-C以降は保護されたScript Propertiesを正本とする。
+  // Security.gs未読込の旧Phase 0テスト／rollback時だけConfig snapshotへ戻る。
+  if (typeof getSecureSetting_ === 'function') {
+    return String(getSecureSetting_('ENABLE_SEND') || '').trim().toUpperCase() === 'TRUE';
+  }
   var value = configSnapshot && configSnapshot.ENABLE_SEND !== undefined
     ? configSnapshot.ENABLE_SEND
-    : getConfig('ENABLE_SEND');
+    : getConfig_('ENABLE_SEND');
   return String(value || '').trim().toUpperCase() === 'TRUE';
 }
 
@@ -109,7 +114,7 @@ function parseNotifyStages_(rawValue) {
 function getConfiguredDailySendLimit_(configSnapshot) {
   var value = configSnapshot && configSnapshot.GMAIL_DAILY_LIMIT !== undefined
     ? configSnapshot.GMAIL_DAILY_LIMIT
-    : getConfig('GMAIL_DAILY_LIMIT');
+    : getConfig_('GMAIL_DAILY_LIMIT');
   var raw = String(value || '').trim();
   if (!/^\d+$/.test(raw)) {
     throw new Error('GMAIL_DAILY_LIMITが未設定または不正です');
@@ -147,6 +152,33 @@ function countEmailRecipients_(to, options) {
     unique[email.toLowerCase()] = true;
   });
   return Object.keys(unique).length;
+}
+
+function isSafeOutboundEmail_(value) {
+  var email = String(value || '').trim().toLowerCase();
+  return email.length <= 254 &&
+    email.indexOf('\r') < 0 &&
+    email.indexOf('\n') < 0 &&
+    /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(email);
+}
+
+function validateOutboundEnvelope_(to, subject, options) {
+  var recipients = normalizeEmailRecipients_(to).concat(
+    normalizeEmailRecipients_(options && options.cc),
+    normalizeEmailRecipients_(options && options.bcc)
+  );
+  if (recipients.length === 0 || recipients.some(function(email) {
+    return !isSafeOutboundEmail_(email);
+  })) {
+    throw new Error('To/CC/BCCに不正なメールアドレスがあります');
+  }
+  var safeSubject = String(subject || '');
+  if (!safeSubject ||
+      safeSubject.length > 250 ||
+      /[\r\n\u0000-\u001f\u007f]/.test(safeSubject)) {
+    throw new Error('件名が空欄、長すぎる、または制御文字を含んでいます');
+  }
+  return true;
 }
 
 /**
@@ -218,6 +250,7 @@ function sendSystemEmail_(params) {
 
   notificationData.to_email = notificationData.to_email || to;
   notificationData.cc_email = notificationData.cc_email || String(options.cc || '');
+  notificationData.bcc_email = notificationData.bcc_email || String(options.bcc || '');
   notificationData.subject = notificationData.subject || subject;
   notificationData.body = notificationData.body || body;
   notificationData.stage = notificationData.stage || 'SYSTEM';
@@ -238,6 +271,15 @@ function sendSystemEmail_(params) {
       notificationData,
       'BLOCKED_RECIPIENT',
       '送信先が未設定です'
+    );
+  }
+  try {
+    validateOutboundEnvelope_(to, subject, options);
+  } catch (envelopeError) {
+    return recordBlockedNotification_(
+      notificationData,
+      'BLOCKED_INVALID_ENVELOPE',
+      envelopeError.message || String(envelopeError)
     );
   }
 
@@ -286,6 +328,68 @@ function sendSystemEmail_(params) {
       );
     }
 
+    // 通知キュー経由の場合、送信ロック内でmode・権限・pilot・master versionを再検証する。
+    // 検証からGmail送信まで同じScriptLock下に置き、マスタ更新との競合を防ぐ。
+    if (params.queueContext) {
+      var queuePolicy;
+      try {
+        if (typeof validateQueuedSendPolicy_ !== 'function') {
+          throw new Error('通知キューpolicyが読み込まれていません');
+        }
+        queuePolicy = validateQueuedSendPolicy_(params.queueContext);
+      } catch (queuePolicyError) {
+        return recordBlockedNotification_(
+          notificationData,
+          String(queuePolicyError.code || 'BLOCKED_QUEUE_POLICY'),
+          queuePolicyError.message || String(queuePolicyError)
+        );
+      }
+      to = String(queuePolicy.to || '').trim();
+      subject = String(queuePolicy.subject || '');
+      body = String(queuePolicy.body || '');
+      options = queuePolicy.options || {};
+      notificationData.to_email = to;
+      notificationData.cc_email = String(options.cc || '');
+      notificationData.bcc_email = String(options.bcc || '');
+      notificationData.subject = subject;
+      notificationData.body = body;
+      notificationData.notification_mode = queuePolicy.mode || '';
+      recipientCount = countEmailRecipients_(to, options);
+      if (!to || recipientCount <= 0) {
+        return recordBlockedNotification_(
+          notificationData,
+          'BLOCKED_RECIPIENT',
+          '送信先が未設定です'
+        );
+      }
+      try {
+        validateOutboundEnvelope_(to, subject, options);
+      } catch (queueEnvelopeError) {
+        return recordBlockedNotification_(
+          notificationData,
+          'BLOCKED_INVALID_ENVELOPE',
+          queueEnvelopeError.message || String(queueEnvelopeError)
+        );
+      }
+    } else if (typeof getNotificationMode_ === 'function') {
+      try {
+        if (String(params.sendOrigin || '') !== 'SYSTEM_INTERNAL') {
+          throw appError_(
+            'BLOCKED_UNQUEUED_SEND',
+            '通知キューを経由しないメール送信は禁止されています',
+            false
+          );
+        }
+        validateSystemInternalSendPolicy_(to, options);
+      } catch (systemPolicyError) {
+        return recordBlockedNotification_(
+          notificationData,
+          String(systemPolicyError.code || 'BLOCKED_SYSTEM_POLICY'),
+          systemPolicyError.message || String(systemPolicyError)
+        );
+      }
+    }
+
     var configuredLimit;
     try {
       configuredLimit = getConfiguredDailySendLimit_(freshConfig);
@@ -299,9 +403,28 @@ function sendSystemEmail_(params) {
 
     // PENDINGは「送信結果が不確実な予約」として扱い、自動再送しない。
     // FAILEDだけが再試行可能。SENT更新失敗でPENDINGが残っても二重送信を防ぐ。
+    var idempotencyKey = String(notificationData.idempotency_key || '').trim();
     var permitId = String(notificationData.permit_id || '').trim();
     var stage = String(notificationData.stage || '').trim();
-    if (permitId && stage) {
+    if (idempotencyKey &&
+        typeof NotificationsModel.hasBeenReservedOrSentByIdempotency === 'function') {
+      try {
+        if (NotificationsModel.hasBeenReservedOrSentByIdempotency(idempotencyKey)) {
+          return recordBlockedNotification_(
+            notificationData,
+            'BLOCKED_DUPLICATE_RESERVATION',
+            '同一idempotency keyのPENDINGまたはSENTが既に存在します'
+          );
+        }
+      } catch (idempotencyCheckError) {
+        return recordBlockedNotification_(
+          notificationData,
+          'BLOCKED_LOG_FAILURE',
+          '重複送信を確認できません: ' +
+            (idempotencyCheckError.message || String(idempotencyCheckError))
+        );
+      }
+    } else if (permitId && stage) {
       try {
         if (NotificationsModel.hasBeenReservedOrSent(permitId, stage)) {
           return recordBlockedNotification_(
@@ -323,7 +446,10 @@ function sendSystemEmail_(params) {
     // PENDINGを予約済みとして数え、並行実行時の日次上限超過を抑止する。
     var reservedOrSent;
     try {
-      reservedOrSent = NotificationsModel.countReservedOrSentToday();
+      reservedOrSent =
+        typeof NotificationsModel.countReservedOrSentRecipientsToday === 'function'
+          ? NotificationsModel.countReservedOrSentRecipientsToday()
+          : NotificationsModel.countReservedOrSentToday();
     } catch (countErr) {
       return recordBlockedNotification_(
         notificationData,
@@ -331,11 +457,12 @@ function sendSystemEmail_(params) {
         '送信済み件数を確認できません: ' + (countErr.message || String(countErr))
       );
     }
-    if (reservedOrSent >= configuredLimit) {
+    if (reservedOrSent + recipientCount > configuredLimit) {
       return recordBlockedNotification_(
         notificationData,
         'BLOCKED_CONFIG_LIMIT',
-        '設定上の日次送信上限に達しました: ' + configuredLimit
+        '設定上の日次受信者上限に達します: reserved=' + reservedOrSent +
+          ', required=' + recipientCount + ', limit=' + configuredLimit
       );
     }
 
@@ -360,6 +487,7 @@ function sendSystemEmail_(params) {
 
     // 送信前にintentを記録する。記録失敗時は送信しない。
     notificationData.result = 'PENDING';
+    notificationData.recipient_count = recipientCount;
     var created;
     try {
       created = NotificationsModel.create(notificationData);
@@ -419,7 +547,7 @@ function sendSystemEmail_(params) {
           ? failedLogError + '; flush: ' + failedFlush.message
           : 'flush: ' + failedFlush.message;
       }
-      logError('メール送信エラー', sendErr);
+      logError_('メール送信エラー', sendErr);
       return {
         success: false,
         sent: false,
@@ -428,7 +556,7 @@ function sendSystemEmail_(params) {
         message: sendErr.message || String(sendErr),
         notificationId: notificationId,
         logUpdated: failedLogUpdated,
-        logError: failedLogError
+        logError_: failedLogError
       };
     }
 
@@ -468,7 +596,7 @@ function sendSystemEmail_(params) {
       result: 'SENT',
       notificationId: notificationId,
       logUpdated: sentLogUpdated,
-      logError: sentLogError
+      logError_: sentLogError
     };
   } finally {
     // BLOCKED系や結果flush失敗時も、ロックを解放する前に最後の確定を試みる。
@@ -494,7 +622,7 @@ function sendSystemEmail_(params) {
  * @return {Object}
  */
 function sendErrorAlert_(subject, message) {
-  var recipients = normalizeEmailRecipients_(getConfig('ADMIN_EMAILS'));
+  var recipients = normalizeEmailRecipients_(getConfig_('ADMIN_EMAILS'));
   if (recipients.length === 0) {
     console.error('ADMIN_EMAILS未設定。エラーアラートを送信できません: ' + subject);
     return {
@@ -541,7 +669,7 @@ function sendErrorAlert_(subject, message) {
  * @param {string} message
  * @param {Error} [error]
  */
-function logError(message, error) {
+function logError_(message, error) {
   var detail = message;
   if (error) {
     detail += '\n' + (error.message || String(error));
@@ -555,7 +683,7 @@ function logError(message, error) {
  * @param {number} dayOfWeek
  * @return {boolean}
  */
-function isTodayDayOfWeek(dayOfWeek) {
+function isTodayDayOfWeek_(dayOfWeek) {
   var now = new Date();
   return now.getDay() === dayOfWeek;
 }
