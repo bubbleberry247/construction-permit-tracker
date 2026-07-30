@@ -361,6 +361,45 @@
       if (busy) button.dataset.originalText = button.textContent;
       button.textContent = busy ? '処理中…' : (button.dataset.originalText || button.textContent);
     }
+    function clearClientSession_() {
+      stopAuthPolling();
+      AUTH_FLOW_STATE = '';
+      AUTH_TOKEN = '';
+      CURRENT_USER = null;
+      CURRENT_COMPANY = null;
+      CURRENT_COMPANY_PERMITS = [];
+      PENDING_COMPANY_CHANGES = null;
+      CURRENT_QUEUE_PREVIEW = [];
+      ACTIVE_USERS = [];
+    }
+    function showLoginView_(message, isError) {
+      clearClientSession_();
+      document.querySelectorAll('dialog[open]').forEach(function(dialog) {
+        dialog.close();
+      });
+      byId('app-view').classList.add('hidden');
+      byId('login-view').classList.remove('hidden');
+      setBusy(byId('google-signin'), false);
+      setText('user-label', '');
+      setText('login-status', message);
+      byId('login-status').classList.toggle('error', !!isError);
+    }
+    function isAuthenticationError_(error) {
+      return !!error && String(error.code || '') === 'UNAUTHORIZED';
+    }
+    function handleAuthenticationError_(error) {
+      if (!isAuthenticationError_(error)) return false;
+      showLoginView_(
+        'ログインの有効期限が切れました。Googleで再ログインしてください。',
+        true
+      );
+      return true;
+    }
+    function showApiError_(error) {
+      if (isAuthenticationError_(error)) return false;
+      showToast(error && error.message ? error.message : '処理に失敗しました', true);
+      return true;
+    }
     function invokeApi(action, payload, idToken) {
       return new Promise(function(resolve, reject) {
         google.script.run
@@ -378,8 +417,16 @@
       });
     }
     function api(action, payload) {
-      if (!AUTH_TOKEN) return Promise.reject(new Error('ログインが必要です'));
-      return invokeApi(action, payload, AUTH_TOKEN);
+      if (!AUTH_TOKEN) {
+        var missingTokenError = new Error('ログインが必要です');
+        missingTokenError.code = 'UNAUTHORIZED';
+        handleAuthenticationError_(missingTokenError);
+        return Promise.reject(missingTokenError);
+      }
+      return invokeApi(action, payload, AUTH_TOKEN).catch(function(error) {
+        handleAuthenticationError_(error);
+        throw error;
+      });
     }
     function anonymousApi(action, payload) {
       return invokeApi(action, payload, '');
@@ -397,11 +444,13 @@
         setText('user-label', user.displayName + '\n' + user.email);
         byId('nav-mlit').classList.toggle('hidden', !hasCapability('mlit.read'));
         byId('nav-operations').classList.toggle('hidden', !hasCapability('operations.read'));
-        loadCompanies();
+        showScreen('companies');
       }).catch(function(error) {
-        AUTH_TOKEN = '';
-        setText('login-status', error.message);
-        byId('login-status').classList.add('error');
+        if (!isAuthenticationError_(error)) {
+          AUTH_TOKEN = '';
+          setText('login-status', error.message);
+          byId('login-status').classList.add('error');
+        }
       });
     }
     function stopAuthPolling() {
@@ -466,13 +515,7 @@
       setText('login-status', '登録済みGoogleアカウントでログインしてください。');
     }
     function logout() {
-      stopAuthPolling();
-      AUTH_FLOW_STATE = '';
-      AUTH_TOKEN = '';
-      CURRENT_USER = null;
-      byId('app-view').classList.add('hidden');
-      byId('login-view').classList.remove('hidden');
-      setText('login-status', 'ログアウトしました。再度ログインできます。');
+      showLoginView_('ログアウトしました。再度ログインできます。', false);
     }
     function showScreen(name) {
       ['companies','notifications','mlit','operations'].forEach(function(screen) {
@@ -526,6 +569,7 @@
           emptyCell.colSpan = 6; empty.appendChild(emptyCell); body.appendChild(empty);
         }
       }).catch(function(error) {
+        if (isAuthenticationError_(error)) return;
         body.replaceChildren(); var row = document.createElement('tr'); var td = cell(error.message);
         td.colSpan = 6; td.className = 'error'; row.appendChild(td); body.appendChild(row);
       });
@@ -586,7 +630,7 @@
       }).then(function(data) {
         showToast(data.message + ' 監査ID: ' + data.auditId, false);
       }).catch(function(error) {
-        showToast(error.message, true);
+        showApiError_(error);
       }).finally(function() {
         setBusy(button, false);
       });
@@ -625,7 +669,7 @@
         setText('company-save-result', '');
         renderCompanyPermits(CURRENT_COMPANY_PERMITS);
         byId('company-dialog').showModal();
-      }).catch(function(error) { showToast(error.message, true); });
+      }).catch(function(error) { showApiError_(error); });
     }
     function toggleCompanyMonitoring() {
       if (!CURRENT_COMPANY || !hasCapability('companies.manage_monitoring')) return;
@@ -652,7 +696,7 @@
         );
         loadCompanies();
       }).catch(function(error) {
-        showToast(error.message, true);
+        showApiError_(error);
       }).finally(function() {
         setBusy(button, false);
       });
@@ -710,6 +754,7 @@
         byId('diff-dialog').close(); byId('company-dialog').close();
         showToast('更新しました。監査ID: ' + data.auditId, false); loadCompanies();
       }).catch(function(error) {
+        if (isAuthenticationError_(error)) return;
         showToast(error.message + (error.auditId ? ' 監査ID: ' + error.auditId : ''), true);
         if (error.code === 'STALE_VERSION') byId('diff-dialog').close();
       }).finally(function(){ setBusy(button, false); });
@@ -749,7 +794,7 @@
           }
           tr.appendChild(actionCell); body.appendChild(tr);
         });
-      }).catch(function(error){ showToast(error.message, true); });
+      }).catch(function(error){ showApiError_(error); });
     }
     function selectedQueueIds() {
       return Array.from(byId('queue-table-body').querySelectorAll('input[type=checkbox]:checked')).map(function(input){ return input.dataset.queueId; });
@@ -773,7 +818,7 @@
           addendum.value = item.addendum || ''; card.appendChild(addendum); list.appendChild(card);
         });
         byId('notification-dialog').showModal();
-      }).catch(function(error){ showToast(error.message, true); });
+      }).catch(function(error){ showApiError_(error); });
     }
     function sendQueues() {
       if (!window.confirm('表示中のメールを外部送信します。宛先と本文を確認しましたか？')) return;
@@ -785,11 +830,11 @@
         var failed = data.items.filter(function(item){ return !item.ok; });
         byId('notification-dialog').close(); loadQueues();
         showToast(failed.length ? failed.length + '件は送信されませんでした。状態を確認してください。' : data.items.length + '件を送信しました', failed.length > 0);
-      }).catch(function(error){ showToast(error.message, true); }).finally(function(){ setBusy(button, false); });
+      }).catch(function(error){ showApiError_(error); }).finally(function(){ setBusy(button, false); });
     }
     function regenerateQueue(queueId) {
       api('notifications.regenerate', {queueId:queueId}).then(function(){ showToast('候補を再生成しました', false); loadQueues(); })
-        .catch(function(error){ showToast(error.message, true); });
+        .catch(function(error){ showApiError_(error); });
     }
     function reconcileQueue(queueId, outcome) {
       var guidance = outcome === 'CONFIRMED_SENT'
@@ -804,7 +849,7 @@
       }).then(function(data) {
         showToast('照合を確定しました。監査ID: ' + data.auditId, false);
         loadQueues();
-      }).catch(function(error) { showToast(error.message, true); });
+      }).catch(function(error) { showApiError_(error); });
     }
 
     function loadMlitDiffs() {
@@ -863,6 +908,7 @@
           emptyCell.colSpan = 7; empty.appendChild(emptyCell); body.appendChild(empty);
         }
       }).catch(function(error) {
+        if (isAuthenticationError_(error)) return;
         body.replaceChildren(); var row = document.createElement('tr'); var errorCell = cell(error.message);
         errorCell.colSpan = 7; errorCell.className = 'error'; row.appendChild(errorCell); body.appendChild(row);
       });
@@ -881,7 +927,7 @@
       }).then(function(data) {
         showToast('期限を反映しました。監査ID: ' + data.auditId, false);
         loadMlitDiffs();
-      }).catch(function(error) { showToast(error.message, true); });
+      }).catch(function(error) { showApiError_(error); });
     }
     function dismissMlitDiff(item) {
       var reason = window.prompt('MLIT期限差分を却下する理由を入力してください。');
@@ -892,7 +938,7 @@
       }).then(function(data) {
         showToast('差分を却下しました。監査ID: ' + data.auditId, false);
         loadMlitDiffs();
-      }).catch(function(error) { showToast(error.message, true); });
+      }).catch(function(error) { showApiError_(error); });
     }
 
     function loadOperations() {
@@ -922,7 +968,7 @@
           });
           byId('mlit-mode-admin').classList.toggle('hidden', !hasCapability('mlit.configure'));
           renderUsers(ACTIVE_USERS);
-        }).catch(function(error){ showToast(error.message, true); });
+        }).catch(function(error){ showApiError_(error); });
     }
     function changeMode() {
       var mode = byId('mode-select').value;
@@ -935,7 +981,7 @@
         confirmLowVolumeWaiver:byId('confirm-low-volume').checked,
         lowVolumeWaiverReason:byId('low-volume-reason').value.trim()
       }).then(function(data){ showToast('modeを' + data.mode + 'へ変更しました', false); loadOperations(); })
-        .catch(function(error){ showToast(error.message, true); });
+        .catch(function(error){ showApiError_(error); });
     }
     function changeMlitMode() {
       if (!hasCapability('mlit.configure')) return;
@@ -947,7 +993,7 @@
         .then(function(data) {
           showToast('MLIT modeを' + data.mode + 'へ変更しました', false);
           loadOperations();
-        }).catch(function(error) { showToast(error.message, true); });
+        }).catch(function(error) { showApiError_(error); });
     }
     function applySchema() {
       var confirmation = window.prompt('バックアップ取得後であることを確認し、APPLY_SCHEMA_V2 と入力してください。');
@@ -960,7 +1006,7 @@
           '社 / 許可version補完 ' + data.permitSyncBackfill.permits +
           '件 / 監査ID ' + data.auditId);
         showToast('schema v2を適用しました', false);
-      }).catch(function(error){ showToast(error.message, true); });
+      }).catch(function(error){ showApiError_(error); });
     }
     function renderUsers(users) {
       var body = byId('users-table-body'); body.replaceChildren();
@@ -982,7 +1028,7 @@
     function updateUserRow(email, displayName, role, active, canSendExternal, managerEmail) {
       api('users.update', {email:email, displayName:displayName, role:role, active:active, canSendExternal:canSendExternal, managerEmail:managerEmail})
         .then(function(data){ showToast(data.user.email + 'を更新しました', false); loadOperations(); })
-        .catch(function(error){ showToast(error.message, true); });
+        .catch(function(error){ showApiError_(error); });
     }
 
     document.querySelectorAll('nav button[data-screen]').forEach(function(button){ button.addEventListener('click', function(){ showScreen(button.dataset.screen); }); });

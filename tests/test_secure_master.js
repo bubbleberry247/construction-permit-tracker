@@ -248,6 +248,82 @@ test('全Apps ScriptとHTML内JavaScriptが構文解析できる', () => {
   });
 });
 
+test('認証期限切れは一覧エラーにせず共通ログイン画面へ戻す', () => {
+  const html = source('index.html');
+  const inlineScript = html.match(
+    /<script(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/i
+  )[1];
+  const authClient = inlineScript.slice(
+    inlineScript.indexOf("'use strict';"),
+    inlineScript.indexOf('function invokeApi')
+  );
+  const elements = new Map();
+  function element(id) {
+    if (!elements.has(id)) {
+      const classes = new Set();
+      elements.set(id, {
+        id,
+        textContent: '',
+        disabled: false,
+        dataset: {},
+        style: {},
+        classList: {
+          add: name => classes.add(name),
+          remove: name => classes.delete(name),
+          toggle: (name, force) => force ? classes.add(name) : classes.delete(name),
+          contains: name => classes.has(name)
+        }
+      });
+    }
+    return elements.get(id);
+  }
+  const context = vm.createContext({
+    Date, Error, JSON, Math, Number, Object, Promise, String,
+    Array, Boolean, Map,
+    crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' },
+    document: { getElementById: element, querySelectorAll: () => [] },
+    window: { clearTimeout: () => {}, setTimeout: () => 1 }
+  });
+  vm.runInContext(authClient, context, { filename: 'index-auth-client.js' });
+  context.stopAuthPolling = () => { context.AUTH_POLL_TIMER = null; };
+
+  context.AUTH_TOKEN = 'expired-token';
+  context.AUTH_FLOW_STATE = 'state';
+  context.CURRENT_USER = {email: 'user@example.com'};
+  element('app-view').classList.remove('hidden');
+  element('login-view').classList.add('hidden');
+
+  assert.equal(context.handleAuthenticationError_({code: 'UNAUTHORIZED'}), true);
+  assert.equal(context.AUTH_TOKEN, '');
+  assert.equal(context.AUTH_FLOW_STATE, '');
+  assert.equal(context.CURRENT_USER, null);
+  assert.equal(element('app-view').classList.contains('hidden'), true);
+  assert.equal(element('login-view').classList.contains('hidden'), false);
+  assert.match(element('login-status').textContent, /有効期限.*再ログイン/);
+  assert.equal(element('login-status').classList.contains('error'), true);
+
+  element('toast').classList.add('hidden');
+  assert.equal(context.showApiError_({code: 'UNAUTHORIZED', message: 'expired'}), false);
+  assert.equal(element('toast').classList.contains('hidden'), true);
+
+  context.AUTH_TOKEN = 'valid-token';
+  assert.equal(context.handleAuthenticationError_({code: 'VALIDATION_ERROR'}), false);
+  assert.equal(context.AUTH_TOKEN, 'valid-token');
+  assert.equal(context.showApiError_({code: 'VALIDATION_ERROR', message: '入力エラー'}), true);
+  assert.equal(element('toast').textContent, '入力エラー');
+  assert.equal(element('toast').classList.contains('hidden'), false);
+
+  assert.match(
+    inlineScript,
+    /api\('companies\.list'[\s\S]*?\.catch\(function\(error\) \{\s*if \(isAuthenticationError_\(error\)\) return;/
+  );
+  assert.match(
+    inlineScript,
+    /api\('mlit\.listDiffs'[\s\S]*?\.catch\(function\(error\) \{\s*if \(isAuthenticationError_\(error\)\) return;/
+  );
+  assert.match(inlineScript, /showScreen\('companies'\);/);
+});
+
 test('旧クライアント申告認証と固定キーを残さない', () => {
   const combined = ['api.gs', 'auth.gs', 'OAuthLogin.gs', 'Code2.gs', 'index.html']
     .map(source).join('\n');
