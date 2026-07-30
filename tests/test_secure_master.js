@@ -73,8 +73,19 @@ function baseContext() {
     Notifications: []
   };
   let uuid = 0;
+  const fakeIdToken =
+    'a'.repeat(40) + '.' + 'b'.repeat(40) + '.' + 'c'.repeat(40);
+  const cacheStore = new Map();
+  const scriptCache = {
+    get: key => cacheStore.has(key) ? cacheStore.get(key) : null,
+    put: (key, value) => { cacheStore.set(key, String(value)); },
+    remove: key => { cacheStore.delete(key); }
+  };
   const properties = {
     GOOGLE_CLIENT_ID: 'client.apps.googleusercontent.com',
+    GOOGLE_CLIENT_SECRET: 'test-client-secret-that-is-long-enough',
+    GOOGLE_OAUTH_REDIRECT_URI:
+      'https://script.google.com/macros/s/TEST_DEPLOYMENT_IDENTIFIER_1234567890/exec',
     NOTIFICATION_MODE: 'OFF',
     PILOT_COMPANY_IDS: '',
     INTERNAL_TEST_RECIPIENTS: 'internal@example.com'
@@ -100,23 +111,41 @@ function baseContext() {
         deleteProperty: key => { delete properties[key]; }
       })
     },
-    CacheService: { getScriptCache: () => ({ get: () => null, put: () => {} }) },
+    CacheService: { getScriptCache: () => scriptCache },
     UrlFetchApp: {
-      fetch: () => ({
-        getResponseCode: () => 200,
-        getContentText: () => JSON.stringify({
-          sub: '123', email: 'm-fujita@tokai-ic.co.jp', email_verified: 'true',
-          aud: properties.GOOGLE_CLIENT_ID, iss: 'https://accounts.google.com',
-          exp: Math.floor(Date.now() / 1000) + 3600, name: '藤田'
-        })
-      })
+      fetch: url => {
+        if (String(url) === 'https://oauth2.googleapis.com/token') {
+          return {
+            getResponseCode: () => 200,
+            getContentText: () => JSON.stringify({ id_token: fakeIdToken })
+          };
+        }
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({
+            sub: '123', email: 'm-fujita@tokai-ic.co.jp', email_verified: 'true',
+            aud: properties.GOOGLE_CLIENT_ID, iss: 'https://accounts.google.com',
+            exp: Math.floor(Date.now() / 1000) + 3600, name: '藤田'
+          })
+        };
+      }
     },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'SHA_256' },
       Charset: { UTF_8: 'UTF_8' },
       computeDigest: () => Array(32).fill(1),
+      base64EncodeWebSafe: bytes => Buffer.from(
+        bytes.map(byte => byte < 0 ? byte + 256 : byte)
+      ).toString('base64url'),
       formatDate: () => '2026-07-30 12:00:00',
-      getUuid: () => `UUID-${++uuid}`
+      getUuid: () => `00000000-0000-4000-8000-${String(++uuid).padStart(12, '0')}`
+    },
+    HtmlService: {
+      createHtmlOutput: content => ({
+        content,
+        setTitle() { return this; },
+        addMetaTag() { return this; }
+      })
     },
     SpreadsheetApp: { flush: () => {} },
     LockService: {
@@ -152,6 +181,7 @@ function baseContext() {
     }),
     getNowString_: () => '2026-07-30 12:00:00',
     generateUuid_: () => `UUID-${++uuid}`,
+    toSerializable_: value => value,
     normalizeEmailRecipients_: value => String(value || '').split(',').map(v => v.trim()).filter(Boolean),
     normalizePermitNumberForMlit_: value => String(value || '').replace(/^0+/, '') || '0',
     parseNotifyStages_: () => [90, 60, 30, 0],
@@ -163,8 +193,11 @@ function baseContext() {
   };
   context.__rows = rows;
   context.__properties = properties;
+  context.__cacheStore = cacheStore;
+  context.__fakeIdToken = fakeIdToken;
   vm.createContext(context);
   vm.runInContext(source('Security.gs'), context, { filename: 'Security.gs' });
+  vm.runInContext(source('OAuthLogin.gs'), context, { filename: 'OAuthLogin.gs' });
   vm.runInContext(source('api.gs'), context, { filename: 'api.gs' });
   vm.runInContext(source('MasterService.gs'), context, { filename: 'MasterService.gs' });
   vm.runInContext(source('PermitSyncService.gs'), context, { filename: 'PermitSyncService.gs' });
@@ -216,10 +249,147 @@ test('全Apps ScriptとHTML内JavaScriptが構文解析できる', () => {
 });
 
 test('旧クライアント申告認証と固定キーを残さない', () => {
-  const combined = ['api.gs', 'auth.gs', 'Code2.gs', 'index.html']
+  const combined = ['api.gs', 'auth.gs', 'OAuthLogin.gs', 'Code2.gs', 'index.html']
     .map(source).join('\n');
   assert.doesNotMatch(combined, /clientUserKey|manualLogin|tscg2026|Session\.getEffectiveUser/);
   assert.doesNotMatch(source('index.html'), /localStorage|sessionStorage/);
+  assert.doesNotMatch(source('index.html'), /accounts\.google\.com\/gsi|google\.accounts\.id/);
+});
+
+test('OAuth開始は匿名で許可するがsecretとPKCE verifierをブラウザへ返さない', () => {
+  const context = baseContext();
+  const response = context.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_start_123',
+    action: 'auth.start',
+    payload: {}
+  }, '');
+  assert.equal(response.ok, true);
+  assert.match(response.data.state, /^[A-Za-z0-9_-]{48,160}$/);
+  assert.match(response.data.authorizationUrl, /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?/);
+  assert.match(response.data.authorizationUrl, /code_challenge_method=S256/);
+  assert.match(response.data.authorizationUrl, /response_type=code/);
+  assert.doesNotMatch(
+    JSON.stringify(response.data),
+    /test-client-secret|verifier/i
+  );
+});
+
+test('OAuth callbackはUserAccess確認後にID tokenを一度だけ受け渡す', () => {
+  const context = baseContext();
+  const started = context.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_start_456',
+    action: 'auth.start',
+    payload: {}
+  }, '');
+  assert.equal(started.ok, true);
+
+  const completed = context.completeOAuthCallback_({
+    state: started.data.state,
+    code: 'valid-authorization-code'
+  });
+  assert.equal(completed.ok, true);
+  assert.equal(completed.email, 'm-fujita@tokai-ic.co.jp');
+
+  const firstPoll = context.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_poll_456',
+    action: 'auth.poll',
+    payload: { state: started.data.state }
+  }, '');
+  assert.equal(firstPoll.ok, true);
+  assert.equal(firstPoll.data.status, 'COMPLETED');
+  assert.equal(firstPoll.data.credential, context.__fakeIdToken);
+
+  const replayPoll = context.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_poll_457',
+    action: 'auth.poll',
+    payload: { state: started.data.state }
+  }, '');
+  assert.equal(replayPoll.ok, false);
+  assert.equal(replayPoll.error.code, 'AUTH_FLOW_EXPIRED');
+});
+
+test('OAuth state再利用・キャンセル・余分なpayloadをfail-closedで拒否する', () => {
+  const context = baseContext();
+  const started = context.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_start_789',
+    action: 'auth.start',
+    payload: {}
+  }, '');
+  context.completeOAuthCallback_({
+    state: started.data.state,
+    code: 'valid-authorization-code'
+  });
+  assert.throws(
+    () => context.completeOAuthCallback_({
+      state: started.data.state,
+      code: 'second-authorization-code'
+    }),
+    error => error.code === 'AUTH_FLOW_REUSED'
+  );
+
+  const cancelled = context.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_start_cancel',
+    action: 'auth.start',
+    payload: {}
+  }, '');
+  assert.throws(
+    () => context.completeOAuthCallback_({
+      state: cancelled.data.state,
+      error: 'access_denied',
+      error_description: '<script>alert(1)</script>'
+    }),
+    error => error.code === 'AUTH_CANCELLED'
+  );
+  const cancelledPoll = context.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_poll_cancel',
+    action: 'auth.poll',
+    payload: { state: cancelled.data.state }
+  }, '');
+  assert.equal(cancelledPoll.ok, false);
+  assert.equal(cancelledPoll.error.code, 'AUTH_CANCELLED');
+  assert.doesNotMatch(cancelledPoll.error.message, /script|alert/i);
+
+  const extraPayload = context.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_extra_123',
+    action: 'auth.start',
+    payload: { role: 'operations_admin' }
+  }, '');
+  assert.equal(extraPayload.ok, false);
+  assert.equal(extraPayload.error.code, 'INVALID_PAYLOAD');
+});
+
+test('OAuth secret未設定とlock失敗は認証開始前にfail-closedで停止する', () => {
+  const missingSecret = baseContext();
+  delete missingSecret.__properties.GOOGLE_CLIENT_SECRET;
+  const notConfigured = missingSecret.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_missing_secret',
+    action: 'auth.start',
+    payload: {}
+  }, '');
+  assert.equal(notConfigured.ok, false);
+  assert.equal(notConfigured.error.code, 'AUTH_NOT_CONFIGURED');
+
+  const lockFailure = baseContext();
+  lockFailure.LockService = {
+    getScriptLock: () => ({ tryLock: () => false, releaseLock: () => {} })
+  };
+  const busy = lockFailure.apiDispatch({
+    version: '1',
+    requestId: 'request_auth_lock_failure',
+    action: 'auth.start',
+    payload: {}
+  }, '');
+  assert.equal(busy.ok, false);
+  assert.equal(busy.error.code, 'AUTH_FLOW_BUSY');
 });
 
 test('検証済みtokenとUserAccessからのみ利用者を構築する', () => {

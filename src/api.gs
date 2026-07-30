@@ -3,6 +3,8 @@
  */
 
 var API_ACTIONS_ = {
+  'auth.start': { anonymous: true, handler: apiAuthStart_ },
+  'auth.poll': { anonymous: true, handler: apiAuthPoll_ },
   'session.get': { capability: 'session.read', handler: apiSessionGet_ },
   'dashboard.get': { capability: 'dashboard.read', handler: apiDashboardGet_ },
   'companies.list': { capability: 'companies.read', handler: apiCompaniesList_ },
@@ -138,9 +140,11 @@ function apiDispatch(request, idToken) {
   var user = null;
   try {
     normalized = normalizeApiRequest_(request);
-    user = buildAuthenticatedUser_(idToken);
     var route = API_ACTIONS_[normalized.action];
-    requireCapability_(user, route.capability);
+    if (route.anonymous !== true) {
+      user = buildAuthenticatedUser_(idToken);
+      requireCapability_(user, route.capability);
+    }
     var data = route.handler(normalized.payload, user, normalized.requestId);
     return toSerializable_({
       ok: true,

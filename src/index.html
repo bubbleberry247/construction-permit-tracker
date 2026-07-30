@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>建設業許可証管理システム</title>
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     :root {
       --ink: #152235;
@@ -131,7 +130,7 @@
   <section id="login-view" class="login-card card">
     <h2>建設業許可証管理システム</h2>
     <p>会社マスタの連絡先更新と通知確認を行います。登録済みのGoogleアカウントでログインしてください。</p>
-    <div id="google-signin"></div>
+    <button type="button" class="primary" id="google-signin">Googleでログイン</button>
     <p id="login-status" class="muted">認証を準備しています…</p>
   </section>
 
@@ -330,9 +329,10 @@
 
   <script>
     'use strict';
-    var GOOGLE_CLIENT_ID = <?!= JSON.stringify(googleClientId) ?>;
-    var APP_EXEC_URL = <?!= JSON.stringify(appExecUrl) ?>;
     var AUTH_TOKEN = '';
+    var AUTH_FLOW_STATE = '';
+    var AUTH_POLL_TIMER = null;
+    var AUTH_POLL_DEADLINE = 0;
     var CURRENT_USER = null;
     var CURRENT_COMPANY = null;
     var CURRENT_COMPANY_PERMITS = [];
@@ -361,12 +361,8 @@
       if (busy) button.dataset.originalText = button.textContent;
       button.textContent = busy ? '処理中…' : (button.dataset.originalText || button.textContent);
     }
-    function api(action, payload) {
+    function invokeApi(action, payload, idToken) {
       return new Promise(function(resolve, reject) {
-        if (!AUTH_TOKEN) {
-          reject(new Error('ログインが必要です'));
-          return;
-        }
         google.script.run
           .withSuccessHandler(function(response) {
             if (response && response.ok) resolve(response.data);
@@ -378,8 +374,15 @@
             }
           })
           .withFailureHandler(function(error) { reject(error instanceof Error ? error : new Error(String(error))); })
-          .apiDispatch({version:'1', requestId:requestId(), action:action, payload:payload || {}}, AUTH_TOKEN);
+          .apiDispatch({version:'1', requestId:requestId(), action:action, payload:payload || {}}, idToken || '');
       });
+    }
+    function api(action, payload) {
+      if (!AUTH_TOKEN) return Promise.reject(new Error('ログインが必要です'));
+      return invokeApi(action, payload, AUTH_TOKEN);
+    }
+    function anonymousApi(action, payload) {
+      return invokeApi(action, payload, '');
     }
     function hasCapability(capability) {
       return !!CURRENT_USER && Array.isArray(CURRENT_USER.capabilities) && CURRENT_USER.capabilities.indexOf(capability) >= 0;
@@ -401,24 +404,72 @@
         byId('login-status').classList.add('error');
       });
     }
-    function initGoogleLogin() {
-      if (!GOOGLE_CLIENT_ID) {
-        setText('login-status', 'Google client IDが未設定です。運用管理者へ連絡してください。');
+    function stopAuthPolling() {
+      if (AUTH_POLL_TIMER) window.clearTimeout(AUTH_POLL_TIMER);
+      AUTH_POLL_TIMER = null;
+    }
+    function pollGoogleLogin() {
+      if (!AUTH_FLOW_STATE) return;
+      if (Date.now() > AUTH_POLL_DEADLINE) {
+        stopAuthPolling();
+        AUTH_FLOW_STATE = '';
+        setBusy(byId('google-signin'), false);
+        setText('login-status', '認証確認がタイムアウトしました。もう一度お試しください。');
         byId('login-status').classList.add('error');
         return;
       }
-      if (!window.google || !google.accounts || !google.accounts.id) {
-        window.setTimeout(initGoogleLogin, 250);
+      anonymousApi('auth.poll', {state: AUTH_FLOW_STATE}).then(function(result) {
+        if (result.status === 'COMPLETED') {
+          stopAuthPolling();
+          AUTH_FLOW_STATE = '';
+          setBusy(byId('google-signin'), false);
+          handleCredential({credential: result.credential});
+          return;
+        }
+        AUTH_POLL_TIMER = window.setTimeout(pollGoogleLogin, 1200);
+      }).catch(function(error) {
+        stopAuthPolling();
+        AUTH_FLOW_STATE = '';
+        setBusy(byId('google-signin'), false);
+        setText('login-status', error.message);
+        byId('login-status').classList.add('error');
+      });
+    }
+    function beginGoogleLogin() {
+      stopAuthPolling();
+      AUTH_FLOW_STATE = '';
+      byId('login-status').classList.remove('error');
+      setBusy(byId('google-signin'), true);
+      setText('login-status', 'Google認証を開始しています…');
+      var authWindow = window.open('', '_blank');
+      if (!authWindow) {
+        setBusy(byId('google-signin'), false);
+        setText('login-status', '認証画面を開けません。ポップアップを許可して再試行してください。');
+        byId('login-status').classList.add('error');
         return;
       }
-      google.accounts.id.initialize({client_id: GOOGLE_CLIENT_ID, callback: handleCredential, auto_select: false});
-      google.accounts.id.renderButton(byId('google-signin'), {theme:'outline', size:'large', text:'signin_with', locale:'ja'});
-      setText('login-status', '登録済みGoogleアカウントを選択してください。');
+      anonymousApi('auth.start', {}).then(function(result) {
+        AUTH_FLOW_STATE = result.state;
+        AUTH_POLL_DEADLINE = Date.now() + Number(result.expiresInSeconds || 600) * 1000;
+        authWindow.location.replace(result.authorizationUrl);
+        setText('login-status', '別画面でGoogleアカウントを選択してください…');
+        pollGoogleLogin();
+      }).catch(function(error) {
+        try { authWindow.close(); } catch (ignored) {}
+        setBusy(byId('google-signin'), false);
+        setText('login-status', error.message);
+        byId('login-status').classList.add('error');
+      });
+    }
+    function initGoogleLogin() {
+      setBusy(byId('google-signin'), false);
+      setText('login-status', '登録済みGoogleアカウントでログインしてください。');
     }
     function logout() {
+      stopAuthPolling();
+      AUTH_FLOW_STATE = '';
       AUTH_TOKEN = '';
       CURRENT_USER = null;
-      if (window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect();
       byId('app-view').classList.add('hidden');
       byId('login-view').classList.remove('hidden');
       setText('login-status', 'ログアウトしました。再度ログインできます。');
@@ -937,6 +988,7 @@
     document.querySelectorAll('nav button[data-screen]').forEach(function(button){ button.addEventListener('click', function(){ showScreen(button.dataset.screen); }); });
     document.querySelectorAll('[data-close-dialog]').forEach(function(button){ button.addEventListener('click', function(){ byId(button.dataset.closeDialog).close(); }); });
     byId('logout-button').addEventListener('click', logout);
+    byId('google-signin').addEventListener('click', beginGoogleLogin);
     byId('company-search-button').addEventListener('click', loadCompanies);
     byId('company-query').addEventListener('keydown', function(event){ if(event.key==='Enter') loadCompanies(); });
     byId('company-review-button').addEventListener('click', reviewCompanyChanges);
